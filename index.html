@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Space Mission Game</title>
+
+  <!-- Person 4 owns this, we just link it so the page isn't naked -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- 3D stuff gets mounted here by scene.js -->
+  <div id="scene"></div>
+
+  <!-- every screen (map, briefing, builder...) gets swapped in here -->
+  <div id="app"></div>
+
+  <!--
+    Script order matters and is fixed by the contract:
+    three.js first (global THREE), then our files, which all attach to window.SMG.
+    Plain script tags, no modules -- this has to run straight from file://
+    with no build step.
+    three.js is the old global build (r128); the newer ones are ESM only.
+  -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/scene.js"></script>
+  <script src="js/ui.js"></script>
+
+  <!-- ui.js defines SMG.ui.start() -->
+  <script>
+    SMG.ui.start();
+  </script>
+</body>
+</html>
