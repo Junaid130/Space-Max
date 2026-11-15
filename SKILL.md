@@ -73,6 +73,85 @@ SMG.scene.skip()
 
 If a value needed for a visual is missing, use a clearly non-numeric visual fallback or ask the relevant owner to add a field. Do not invent a game value.
 
+### Mission design (v2) — five missions, two notched controls each
+
+The builder's raw math sliders are replaced by **two clear notched controls per mission** (segmented choice buttons, one label per option, no arithmetic). Every wrong combination triggers a **specific, visual, educational failure** in the 3D scene — kids learn real aerospace concepts by watching *why* each attempt failed. Two controls is the deliberate sweet spot for the audience.
+
+**Shared rules (all five missions):**
+
+- Each mission has exactly 2 controls; each control has 2–3 notched options; one option per control is correct.
+- Win = every control matches the mission's `win.combo`.
+- The mission design vocabulary lives in `js/data.js` (content, copy) and `js/sim.js` (evaluation). The scene only renders what they decide.
+- **Evaluation order** (implemented in `sim.launch`, mirrored for previews): (1) all controls match `win.combo` → success; (2) else check `comboFails` (exact multi-control keys, first match wins); (3) else walk `controls` in order and the first control whose choice differs from the win combo determines the failure via its `fails["controlId:optionId"]` entry; (4) safety net → generic `mission_fail`. Data must define a fail entry for every non-winning option.
+
+**Mission 1 — The Apollo 11 Lunar Landing 🌕** (destination Moon; assets `Saturn V.glb` + `Apollo Lunar Module.glb`)
+- Objective: Reach the Moon and land softly inside the green target zone.
+- `staging` — **Empty Booster Stages:** `attached` Keep Attached | `drop50` Drop at 50% Fuel | `dropEmpty` Drop When Empty → win `dropEmpty`
+- `brake` — **Moon Landing Brake:** `chute` Deploy Parachute | `retro` Steady Retro-Thrust | `blast` Max Blast Retro-Thrust → win `retro`
+- Fails: `staging:attached` → `too_heavy` (never reaches the Moon) · `staging:drop50` → `fuel_out` (runs dry mid-flight) · `brake:chute` → `parachute_vacuum` (limp parachute — Moon has no air) · `brake:blast` → `retro_exhaust` (burns landing fuel high up, drops like a rock)
+- Knowledge: **Rocket Staging & Vacuum Physics** — carrying empty tanks wastes energy; parachutes only work where there is an atmosphere.
+
+**Mission 2 — Mars Surveyor Orbit Capture 🪐** (destination Mars; assets `Atlas_V_401.glb` + `Mars Global Surveyor.glb`)
+- Objective: Use Mars's gravity and reverse engines to lock into a stable orbit.
+- `flyby` — **Flyby Distance:** `low` Low (Skim Atmosphere) | `medium` Medium (Just Above Air) | `high` High (Far Out) → win `medium`
+- `brake` — **Retro-Burn Brake:** `short` Short Puff | `balanced` Balanced Burn | `full` Full Stop → win `balanced`
+- Fails: `flyby:low` → `atmospheric_burn` (friction heats the probe) · `flyby:high` → `escape_trajectory` (gravity too weak out there) · `brake:short` → `escape_trajectory` (too little braking) · `brake:full` → `gravity_well_impact` (kills forward speed, gravity pulls it down)
+- Knowledge: **Orbital Capture & Atmospheric Entry** — orbiting balances forward speed and gravity; dip too low and air friction destroys you, brake too hard and you fall.
+
+**Mission 3 — Lunar Gateway Core Placement 🛰️** (Earth–Moon space; assets `Saturn V.glb` + `Gateway Core.glb`)
+- Objective: Park the station module in a stable Halo Orbit between Earth and the Moon.
+- `zone` — **Parking Zone:** `earth` Earth Side | `lagrange` Lagrange Balance Point | `moon` Moon Side → win `lagrange`
+- `rcs` — **Micro-Thrusters (RCS):** `off` OFF | `auto` Auto-Pulse → win `auto`
+- Fails: `zone:earth` → `gravity_tug` · `zone:moon` → `gravity_tug` (whichever world is closer wins the tug-of-war) · `rcs:off` → `station_drift` (hovers, then slowly drifts as the Moon moves)
+- Knowledge: **Lagrange Points & Station-Keeping** — space isn't zero gravity; stations park in gravitational balance zones and use tiny thruster pulses to fight drift.
+
+**Mission 4 — Landsat 8 Polar Deployment 🌍** (destination Earth orbit; assets `Atlas_V_401.glb` + `Landsat 8.glb`)
+- Objective: Place an Earth-mapping satellite where it photographs the entire planet over time.
+- `direction` — **Launch Direction:** `east` East (Along Equator) | `polar` North–South (Over the Poles) → win `polar`
+- `altitude` — **Orbit Altitude:** `low` Low (150 km) | `medium` Medium (700 km) | `ultra` Ultra-High (36,000 km) → win `medium`
+- Fails: `direction:east` → `equatorial_orbit` (stuck over the same middle belt) · `altitude:low` → `drag_deorbit` (upper-atmosphere drag pulls it down) · `altitude:ultra` → `orbit_too_high` (safe, but Earth is too small to photograph)
+- Knowledge: **Polar Orbits & Atmospheric Drag** — let Earth's daily spin bring new land beneath the camera; fly high enough to escape air drag.
+
+**Mission 5 — Chandra Deep Space Slingshot 🔭** (destination high Earth orbit; asset `Chandra X-ray Observatory.glb`)
+- Objective: Catapult the delicate X-ray telescope outside Earth's glowing red radiation belts.
+- `burn` — **Where to Fire Booster:** `apogee` Highest Point (Apogee) | `perigee` Lowest Point (Perigee) → win `perigee`
+- `nose` — **Which Way to Point Nose:** `up` Point Up (Away from Earth) | `forward` Point Forward (Along Orbit) → win `forward`
+- Fails: `comboFails: burn:apogee|nose:forward` → `weak_boost` (push at the slowest point leaves Chandra trapped in the Van Allen belts) · `nose:up` → `wrong_axis_burn` (orbit twists sideways instead of stretching out — the signature teaching moment)
+- Knowledge: **The Oberth Effect & Van Allen Belts** — you reach deep space by speeding up *forward*, not pointing up; firing engines at maximum speed gives the biggest boost.
+
+**Data shapes (v2):**
+
+```js
+// js/data.js — mission object
+{
+  id: 'm1_lunar_landing', order: 1,
+  name: 'The Apollo 11 Lunar Landing', destinationId: 'moon', destinationName: 'Moon',
+  objective: 'Reach the Moon and land softly inside the green target zone.',
+  assets: { rocket: 'Saturn V.glb', payload: 'Apollo Lunar Module.glb' },
+  controls: [
+    { id: 'staging', label: 'Empty Booster Stages',
+      options: [ { id: 'attached', label: 'Keep Attached' }, /* ... */ ],
+      correct: 'dropEmpty' },
+    { id: 'brake', label: 'Moon Landing Brake', options: [ /* ... */ ], correct: 'retro' }
+  ],
+  win: { combo: { staging: 'dropEmpty', brake: 'retro' }, successCopy: '...' },
+  fails: { 'staging:attached': { type: 'too_heavy', title: '...', message: '...' } /* every wrong option */ },
+  comboFails: { /* 'burn:apogee|nose:forward': {...} — Mission 5 */ },
+  knowledge: { title: 'Rocket Staging & Vacuum Physics', text: '...' }
+}
+```
+
+```js
+// ui → sim: the player's pick
+SMG.sim.launch({ missionId: 'm1_lunar_landing',
+                 choices: { staging: 'dropEmpty', brake: 'retro' } }, mission)
+// → outcome (unchanged contract): { ok, timeline:[{phase,time}], failure?, events:[] }
+```
+
+- Timeline phases come only from the shared vocabulary: `pad, ascent, stage, coast, orbit, deploy, approach, landing, crew_deploy, rover_deploy, surface_drive, image_capture, data_uplink`. Failures that happen after launch (`parachute_vacuum`, `drag_deorbit`, …) carry `failure.atPhase` naming the phase where the visual should occur.
+- `SMG.sim.computeStats(build, mission)` returns **descriptive vehicle readouts only** (mass/fuel/thrust-style gauges with red/yellow/green buckets) — never win-probability, never the answer.
+- `SMG.sim.validate(build, mission)` returns `{ ok, issues }`; the build screen blocks launch until every control has a pick (issues are plain kid-readable strings).
+
 ## 3. Repository state — what actually exists today
 
 Ground every decision in this snapshot (verify it still matches before relying on it; the repo moves fast).
@@ -81,12 +160,12 @@ Ground every decision in this snapshot (verify it still matches before relying o
 
 | File | State | Notes |
 |---|---|---|
-| `index.html` | Implemented (37 lines) | Loads Three.js **r128 global build** from cdnjs, then `data.js → sim.js → scene.js → ui.js`, then calls `SMG.ui.start()`. Mount points: `#scene` (3D canvas) and `#app` (screens). |
-| `js/ui.js` | Stub (1.2 KB) | Person 3. Exposes only `SMG.ui.start()`, which renders `.screen .screen--loading`. No real screens yet, and it does not call `SMG.scene` yet. |
-| `js/scene.js` | **Empty (0 bytes)** | This skill's primary deliverable. |
-| `css/style.css` | **Empty (0 bytes)** | This skill's second deliverable. |
-| `js/data.js` | **Empty (0 bytes)** | Missions/rockets/failures content not landed yet (Person 1/2). |
-| `js/sim.js` | **Empty (0 bytes)** | `SMG.sim.launch` not landed yet (Person 1/2). |
+| `index.html` | Implemented (37 lines) | Loads Three.js **r128 global build** from cdnjs, then `data.js → sim.js → scene.js → ui.js`, then calls `SMG.ui.start()`. Mount points: `#scene` (3D canvas) and `#app` (screens). Still loads **no GLTFLoader and no GSAP** — scene.js guards both (§8). |
+| `js/ui.js` | Implemented (~990 lines) | Full `campaign → briefing → build → launch → results` flow; calls `SMG.scene.init/showPad/playLaunch/skip`; progress in `localStorage['smg_progress']`; guarded fallbacks for missing data/sim/scene. |
+| `js/scene.js` | Implemented (~3.7k lines) | This skill's primary deliverable: contract module (`init/showPad/playLaunch/skip`), run-token lifecycle, world/rocket/effects, failure + planetary sequences, Preview Lab, plus a dev-only self-bootstrap under `?visualPreview=1`. |
+| `css/style.css` | Implemented (~1.4k lines) | Token system, base/shell, scene overlay, Preview Lab, and all v2 screens (campaign/briefing/build/results). |
+| `js/data.js` | Implemented (~420 lines) | The five missions (v2 design: controls, win combos, `fails`/`comboFails`, knowledge) + 21 failure-copy entries. Content only. |
+| `js/sim.js` | Implemented (~440 lines) | `computeStats` / `validate` / `launch`; pure, deterministic, no DOM/THREE, evaluation order per §2. |
 | `3dmodels/` | 11 GLB files, 74 MB | All model assets live here (not `models/`). |
 | `project.md` | Empty | Ignore. |
 | `README.md` | Title only | Do not edit (not ours). |
@@ -101,9 +180,9 @@ Ground every decision in this snapshot (verify it still matches before relying o
 
 ### Consequences for planning
 
-- `data.js` and `sim.js` are empty, so there is **no real mission content or outcome object to integrate against yet**. Build `scene.js` defensively against the contract in §2, develop with isolated mock outcomes, and re-verify when the real files land.
-- `ui.js` is a placeholder, so nothing calls `SMG.scene` yet. Use the Preview Lab (§15) as the only way to exercise the scene until the UI grows real screens.
-- Do not block on other people's files: ship a working, mock-driven scene first.
+- All six JS/CSS files have landed (see table). `ui.js` drives the real flow and calls `SMG.scene.init()` itself; the Preview Lab additionally self-boots under `?visualPreview=1`, so it works standalone even if the UI never calls in.
+- Still missing: `index.html` loads no GLTFLoader/GSAP (scene guards both, primitives until approved — §8), and the rover/astronaut GLBs are not in `3dmodels/` yet (§7). The rocket GLBs (`Saturn V`, `Atlas_V_401`) are not yet used on the pad — the primitive rocket stays authoritative until a loader lands.
+- Re-verify this snapshot after pulling — the repo moves fast. If any file above is empty again, treat this table as stale.
 
 ## 4. First action: inspect before coding
 
@@ -372,13 +451,12 @@ Use private closures or an internal object. Avoid attaching many one-off globals
 
 ### `scene.showPad(build)`
 
-Show the idle rocket on the pad while the player builds it.
+Show the idle rocket on the pad while the player makes mission choices.
 
-- Derive engine count and fuel presentation from the supplied `build` object. Do not invent builder values.
-- Show multiple nozzle meshes when the build has multiple engines, within a sensible visual cap. The cap is visual only; never modify the build.
+- Accept the v2 build shape (`{ missionId, choices }`) gracefully. Use `mission.assets.rocket` when a mission is known to pick the pad rocket GLB (`Saturn V.glb` / `Atlas_V_401.glb`, primitive fallback); with no mission, show the default neutral pad rocket. Never throw on missing/partial builds.
+- If the build still carries engine/fuel fields (legacy shape), derive engine count and fuel presentation from them and show multiple nozzle meshes within a sensible visual cap. The cap is visual only; never modify the build.
 - Use subtle flame-off engine glow, pad lights, slow camera drift, and restrained ambient motion.
-- Avoid restarting the entire scene or rebuilding shared geometries every time a slider changes.
-- If `build` is missing or incomplete, use the default neutral pad rocket; never throw.
+- Avoid restarting the entire scene or rebuilding shared geometries every time a choice changes; swap only what changed.
 
 ## 11. Animation timeline and sequence design
 
@@ -463,6 +541,25 @@ Every supported failure type must have a visually distinct sequence. The on-scre
 | `over_budget` | No launch animation. UI validation should block launch. |
 | `over_mass` | No launch animation. UI validation should block launch. |
 
+**Mission-design failures (v2, `js/data.js`/`js/sim.js` owned) — each must be visually distinct and land at `failure.atPhase`:**
+
+| `failure.type` | Required visual treatment |
+|---|---|
+| `too_heavy` | Rocket labours off the pad, slows, never drops its empty tanks, gently arcs back down to Earth. Never reaches space. |
+| `parachute_vacuum` | Lander deploys a parachute that pops open then hangs **completely limp**, fluttering uselessly; the lander drifts in too fast and meets the surface with a cartoony dust puff. The no-atmosphere lesson must be obvious. |
+| `retro_exhaust` | Retro flame burns hard, dies out high above the surface (fuel spent), lander drops the rest of the way like a rock, soft-cartoony impact with dust. |
+| `atmospheric_burn` | Probe skims the atmosphere: heat glow and friction streaks build, it tumbles, and fades out safely (no gore, no violent explosion). |
+| `escape_trajectory` | Gravity visibly fails to bend the path — the craft drifts on a straight line into deep space, shrinking to a dot. No failure flash needed beyond the label. |
+| `gravity_well_impact` | Craft brakes hard, its path curls down toward the planet and meets the surface in a cartoony dust puff (non-graphic). |
+| `gravity_tug` | Station visibly pulled off course toward the nearer world (a leaning drift line/arrow toward Earth or Moon), never stabilises. |
+| `station_drift` | Station hovers at its parking point, then slowly, peacefully drifts away as the Moon moves around Earth. |
+| `equatorial_orbit` | Orbit ring locks to the equator band; poles stay dark/unseen. Camera shows the same middle belt repeating. |
+| `drag_deorbit` | Faint atmosphere wisps nick the craft; orbit visibly decays loop by loop until it falls back (fiery streak, cartoony, no impact horror). |
+| `orbit_too_high` | Camera zooms out: Earth becomes tiny, surface detail unreadable; a "TOO FAR TO SEE" style cue from the mission copy. |
+| `weak_boost` | Booster fires at the slowest orbit point: a feeble push, orbit barely grows, craft stays inside the red radiation-belt zone (belt visual present). |
+| `wrong_axis_burn` | Nose points away from Earth, thrust fires "up" — the orbit **twists sideways/rotates** instead of stretching outward. This is the signature teaching moment; make it readable and a little funny, never confusing. |
+| `mission_fail` | Generic safe fallback (brief alert + settle). Data must normally provide a specific type; this exists only as the safety net. |
+
 Failure overlay requirements:
 
 - Show a short label using the provided failure title/message, type, altitude, time, stage, or numbers only when those exact values exist.
@@ -527,6 +624,10 @@ The preview panel must be hidden in normal play. When enabled, it must provide c
 - `stage_fail`
 - `over_budget` blocked/no-launch state
 - `over_mass` blocked/no-launch state
+
+**Mission design (v2)**
+- One full-mission **win** clip per mission (`m1`…`m5`), showing the correct combo's success sequence
+- A failure-type palette that can replay **every `failure.type` in §12** (including all v2 mission types) from mock outcomes with `failure.atPhase` — no dedicated hand-written clip per type is required, but every type must be visibly distinct when rendered
 
 **Events and planetary exploration**
 - Recovered event warning and resume
@@ -608,11 +709,11 @@ Target a stable 60 fps on an ordinary laptop where hardware allows. A stable 30 
 Style at minimum:
 
 - campaign/mission cards, including locked and unlocked states;
-- briefing panel and mission facts;
-- builder panel, component cards, sliders, and red/yellow/green gauge;
+- briefing panel, mission facts, and the **knowledge panel** (`knowledge.title` / `knowledge.text`);
+- build panel with **two notched control groups per mission** (segmented choice buttons — `.control-group` / `.choice` / `.is-selected`), the vehicle-check red/yellow/green gauge, and the disabled-until-complete Launch button;
 - launch/scene wrapper and transition overlays;
 - countdown and failure/recovery labels;
-- results screen and score breakdown;
+- results screen (success copy, failure title/message, knowledge takeaway);
 - buttons, disabled buttons, focus states, tooltips, and status indicators;
 - rover image-preview card and mission-control/data-return indicator;
 - development-only Visual Preview Lab.

@@ -1,0 +1,7 @@
+# Local artifacts — never commit these
+node_modules/
+three.min.js
+shots/
+result.json
+clip-report.json
+gameflow.json
