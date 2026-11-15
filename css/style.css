@@ -983,7 +983,7 @@ p:last-child {
 /* --- Transition card: APPROACHING MARS style --- */
 .smg-card {
   position: absolute;
-  top: 50%;
+  top: 24%;                      /* upper third: never covers the planet below */
   left: 50%;
   translate: -50% -50%;          /* centring; transform stays free to animate */
   max-width: min(90vw, 36rem);
@@ -1429,3 +1429,7 @@ p:last-child {
     padding: var(--smg-space-3) var(--smg-space-4);
   }
 }
+
+/* --- Dev-only Preview Lab mode (?visualPreview=1) ------------------------- */
+/* The lab inspects the 3D scene; the campaign screens step out of the way.   */
+.smg-preview-mode #app { display: none; }

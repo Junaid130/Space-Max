@@ -188,6 +188,145 @@ SMG.scene = (function () {
     try { return encodeURI(p); } catch (e) { return p; }
   }
 
+  // ---------------------------------------------------------------------------
+  // Procedural helpers (deterministic, zero network): seeded RNG, value noise,
+  // canvas factory. Used by terrain, sky and planet maps so every locale has a
+  // real identity instead of one flat colour.
+  // ---------------------------------------------------------------------------
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Smooth value noise: hash a lattice, bilinear-interpolate with smoothstep.
+  function makeNoise2(seed) {
+    var rand = mulberry32(seed);
+    var perm = new Float32Array(512);
+    for (var i = 0; i < 512; i++) perm[i] = rand();
+    function at(ix, iy) {
+      var h = (ix * 374761393 + iy * 668265263) ^ (ix << 13);
+      h = (h ^ (h >>> 13)) >>> 0;
+      return perm[h & 511];
+    }
+    return function noise(x, y) {
+      var x0 = Math.floor(x), y0 = Math.floor(y);
+      var fx = x - x0, fy = y - y0;
+      var ux = fx * fx * (3 - 2 * fx);
+      var uy = fy * fy * (3 - 2 * fy);
+      var a = at(x0, y0), b = at(x0 + 1, y0);
+      var c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+      return lerp(lerp(a, b, ux), lerp(c, d, ux), uy);
+    };
+  }
+
+  function fbm(noise, x, y, octaves) {
+    var amp = 1, freq = 1, sum = 0, norm = 0;
+    for (var i = 0; i < octaves; i++) {
+      sum += noise(x * freq, y * freq) * amp;
+      norm += amp;
+      amp *= 0.5; freq *= 2.03;
+    }
+    return sum / (norm || 1);
+  }
+
+  function makeCanvas(w, h) {
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  function canvasTexture(c) {
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  // r128 treats hex colours as LINEAR while outputEncoding re-encodes to sRGB,
+  // so raw hex always renders washed out. Every material/uniform colour goes
+  // through srgb() so the on-screen colour is the colour that was authored.
+  function srgb(hex) {
+    return new THREE.Color(hex).convertSRGBToLinear();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Locale table. One source of truth for what "standing on X" looks like:
+  // terrain palette + height style, sky gradient, fog, lights, dust colour.
+  // Sequences switch locale through applyLocale(); never hand-tint a plane.
+  // ---------------------------------------------------------------------------
+  var LOCALES = {
+    earth: {
+      terrain: 'earth',
+      sky: ['#0b2a52', '#2f6ba8', '#7fb2dd', '#cfe3ee'],
+      bg: 0x9fc0da,
+      fog: 0xb4cbdd, fogNear: 150, fogFar: 520,
+      hemiSky: 0xbcd8f5, hemiGround: 0x5a4c36, hemiI: 0.42,
+      ambI: 0.16,
+      keyColor: 0xfff2dc, keyI: 1.08,
+      fillColor: 0x86b0e2, fillI: 0.26,
+      rimColor: 0xa8dcff, rimI: 0.2,
+      dust: 0xb59a72,
+      stars: false,
+      exposure: 0.94
+    },
+    moon: {
+      terrain: 'moon',
+      sky: ['#000000', '#000002', '#020307', '#04060c'],
+      bg: 0x020307,
+      fog: 0x04060c, fogNear: 110, fogFar: 430,
+      hemiSky: 0x94a4bd, hemiGround: 0x24262b, hemiI: 0.26,
+      ambI: 0.12,
+      keyColor: 0xfff8ef, keyI: 1.18,
+      fillColor: 0x7d90ad, fillI: 0.14,
+      rimColor: 0x9cc7ff, rimI: 0.18,
+      dust: 0xb9bec6,
+      stars: true,
+      exposure: 0.84
+    },
+    mars: {
+      terrain: 'mars',
+      sky: ['#2a1410', '#5c2a1c', '#a2583a', '#d99b6f'],
+      bg: 0x8a4a30,
+      fog: 0xb06f48, fogNear: 80, fogFar: 330,
+      hemiSky: 0xe0a075, hemiGround: 0x4a2417, hemiI: 0.44,
+      ambI: 0.16,
+      keyColor: 0xffd9b0, keyI: 1.12,
+      fillColor: 0xcc8a5f, fillI: 0.3,
+      rimColor: 0xffb27a, rimI: 0.22,
+      dust: 0xb87a52,
+      stars: false,
+      exposure: 0.92
+    },
+    space: {
+      terrain: null,
+      sky: ['#000000', '#000001', '#010205', '#02040a'],
+      bg: 0x010205,
+      fog: null, fogNear: 0, fogFar: 0,
+      hemiSky: 0x8fb2e0, hemiGround: 0x0a1020, hemiI: 0.26,
+      ambI: 0.14,
+      keyColor: 0xffffff, keyI: 1.0,
+      fillColor: 0x6f8dbf, fillI: 0.2,
+      rimColor: 0x7fd2ff, rimI: 0.26,
+      dust: 0xbfc7d4,
+      stars: true,
+      exposure: 0.96
+    }
+  };
+  var currentLocale = 'earth';
+  var PLANET_VISIBILITY = {
+    earth: { earth: true, moon: true, mars: false, saturn: false },
+    moon: { earth: true, moon: false, mars: false, saturn: false },
+    mars: { earth: true, moon: false, mars: false, saturn: false },
+    space: { earth: true, moon: true, mars: true, saturn: true }
+  };
+  var skyCache = {};              // kind -> CanvasTexture (built lazily)
+
   // --- Tween / timeline helper (one central RAF-driven system) --------------
   // tween({from,to,dur,delay,ease,onUpdate,onComplete,token}) -> handle
   // Every tween can be killed in one place; token-bound tweens die with their run.
@@ -490,7 +629,7 @@ SMG.scene = (function () {
   // --- World ----------------------------------------------------------------
   function createWorld() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05070f);
+    scene.background = srgb(0x05070f);
 
     camera = new THREE.PerspectiveCamera(52, 16 / 9, 0.5, 6000);
     camera.position.set(21, 12, 31);
@@ -499,43 +638,52 @@ SMG.scene = (function () {
 
     createLights();
     makeStarfield();
+    createSky();
     createPlanets();
+    createTerrains();
     createPad();
     createSurface();
     createEffects();
     buildRocket();
+    applyLocale('earth');   // the player starts on Earth: terrain + sky match
   }
 
   function createLights() {
-    world.ambient = new THREE.AmbientLight(0x2b3a5e, 0.65);
+    // Sky/ground bounce first (gives surfaces real colour depth), then a low
+    // ambient so nothing crushes to black, then the sun + fill + rim.
+    world.hemi = new THREE.HemisphereLight(0xbcd8f5, 0x6a5b42, 0.72);
+    scene.add(world.hemi);
+
+    world.ambient = new THREE.AmbientLight(0x2b3a5e, 0.28);
     scene.add(world.ambient);
 
-    world.key = new THREE.DirectionalLight(0xfff1dc, 1.25);   // "sun"
-    world.key.position.set(520, 820, 330);
+    world.key = new THREE.DirectionalLight(0xfff2dc, 1.5);   // "sun"
+    world.key.position.set(520, 640, 380);
     world.key.castShadow = true;
-    world.key.shadow.mapSize.set(1024, 1024);
-    world.key.shadow.camera.near = 100;
-    world.key.shadow.camera.far = 1600;
-    world.key.shadow.camera.left = -70;
-    world.key.shadow.camera.right = 70;
-    world.key.shadow.camera.top = 70;
-    world.key.shadow.camera.bottom = -70;
-    world.key.shadow.bias = -0.0006;
+    world.key.shadow.mapSize.set(2048, 2048);
+    world.key.shadow.camera.near = 40;
+    world.key.shadow.camera.far = 2200;
+    world.key.shadow.camera.left = -150;
+    world.key.shadow.camera.right = 150;
+    world.key.shadow.camera.top = 150;
+    world.key.shadow.camera.bottom = -150;
+    world.key.shadow.bias = -0.0004;
+    world.key.shadow.normalBias = 0.02;
     scene.add(world.key);
     scene.add(world.key.target);
     world.key.target.position.set(0, 0, 0);
 
-    world.fill = new THREE.DirectionalLight(0x8fb2ff, 0.38);   // cool fill
+    world.fill = new THREE.DirectionalLight(0x86b0e2, 0.3);   // cool fill
     world.fill.position.set(-420, 180, -260);
     scene.add(world.fill);
 
-    world.rim = new THREE.DirectionalLight(0x66d0ff, 0.32);    // rim from behind
+    world.rim = new THREE.DirectionalLight(0xa8dcff, 0.22);   // rim from behind
     world.rim.position.set(140, -160, -520);
     scene.add(world.rim);
   }
 
   function makeStarfield() {
-    var count = reducedMotion ? 700 : 1100;
+    var count = reducedMotion ? 900 : 1500;
     var positions = new Float32Array(count * 3);
     var colors = new Float32Array(count * 3);
     for (var i = 0; i < count; i++) {
@@ -548,20 +696,419 @@ SMG.scene = (function () {
       positions[i * 3 + 1] = u * r * 0.75 + 400;
       positions[i * 3 + 2] = Math.sin(theta) * s * r;
       var tint = 0.72 + Math.random() * 0.28;
-      colors[i * 3] = tint;
-      colors[i * 3 + 1] = tint;
-      colors[i * 3 + 2] = Math.min(1, tint + 0.08);
+      var warm = Math.random();
+      colors[i * 3] = tint * (warm > 0.86 ? 1.0 : 0.92);
+      colors[i * 3 + 1] = tint * 0.94;
+      colors[i * 3 + 2] = Math.min(1, tint + (warm < 0.14 ? 0.16 : 0.07));
     }
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     var mat = new THREE.PointsMaterial({
       size: 3.4, sizeAttenuation: true, vertexColors: true,
-      transparent: true, opacity: 0.9, depthWrite: false
+      transparent: true, opacity: 0.92, depthWrite: false, fog: false
     });
     world.stars = new THREE.Points(geo, mat);
     world.stars.frustumCulled = false;
     scene.add(world.stars);
+
+    // Second, denser layer of small stars: parallax + depth, no extra draw cost
+    // worth worrying about (one Points object).
+    var count2 = reducedMotion ? 600 : 2600;
+    var pos2 = new Float32Array(count2 * 3);
+    for (var j = 0; j < count2; j++) {
+      var u2 = Math.random() * 2 - 1;
+      var th2 = Math.random() * Math.PI * 2;
+      var r2 = 1800 + Math.random() * 2600;
+      var s2 = Math.sqrt(1 - u2 * u2);
+      pos2[j * 3] = Math.cos(th2) * s2 * r2;
+      pos2[j * 3 + 1] = u2 * r2 * 0.8 + 360;
+      pos2[j * 3 + 2] = Math.sin(th2) * s2 * r2;
+    }
+    var geo2 = new THREE.BufferGeometry();
+    geo2.setAttribute('position', new THREE.BufferAttribute(pos2, 3));
+    var mat2 = new THREE.PointsMaterial({
+      size: 1.5, sizeAttenuation: true, color: srgb(0xcfd9ff),
+      transparent: true, opacity: 0.55, depthWrite: false, fog: false
+    });
+    world.stars2 = new THREE.Points(geo2, mat2);
+    world.stars2.frustumCulled = false;
+    scene.add(world.stars2);
+  }
+
+  // --- Sky dome -------------------------------------------------------------
+  // A real gradient sky per locale (daylight blue on Earth, black space on the
+  // Moon, dusty butterscotch on Mars). One BackSide sphere, cached textures.
+  function makeSkyTexture(kind) {
+    if (skyCache[kind]) return skyCache[kind];
+    var L = LOCALES[kind] || LOCALES.earth;
+    var stops = L.sky;
+    var c = makeCanvas(512, 512);
+    var ctx = c.getContext('2d');
+    var g = ctx.createLinearGradient(0, 0, 0, 512);
+    for (var i = 0; i < stops.length; i++) {
+      g.addColorStop(i / Math.max(1, stops.length - 1), stops[i]);
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Faint banding dither: stops the gradient from posterising on 8-bit.
+    var rand = mulberry32(1013 + kind.length * 37);
+    for (var y = 0; y < 512; y++) {
+      ctx.globalAlpha = rand() * 0.012;
+      ctx.fillStyle = rand() < 0.5 ? '#ffffff' : '#000000';
+      ctx.fillRect(0, y, 512, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    if (kind === 'mars') {
+      var hg = ctx.createLinearGradient(0, 300, 0, 512);
+      hg.addColorStop(0, 'rgba(226,164,118,0)');
+      hg.addColorStop(1, 'rgba(226,164,118,0.4)');
+      ctx.fillStyle = hg;
+      ctx.fillRect(0, 300, 512, 212);
+    }
+    var tex = canvasTexture(c);
+    skyCache[kind] = tex;
+    return tex;
+  }
+
+  function createSky() {
+    var geo = new THREE.SphereGeometry(4200, 32, 20);
+    var mat = new THREE.MeshBasicMaterial({
+      map: makeSkyTexture('earth'),
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false
+    });
+    world.sky = new THREE.Mesh(geo, mat);
+    world.sky.frustumCulled = false;
+    world.sky.renderOrder = -100;
+    scene.add(world.sky);
+  }
+
+  // --- Terrain --------------------------------------------------------------
+  // Three vertex-coloured terrain meshes (rolling Earth ground, cratered lunar
+  // regolith, wind-carved Martian dunes). One is visible at a time and follows
+  // the locale, so the surface you stand on is always the surface you're on.
+  var TERRAIN_SIZE = 400;
+  var TERRAIN_SEG = 190;
+  var TERRAIN_EDGE = 200;
+
+  function terrainContext(kind) {
+    var ctx = {
+      noiseA: makeNoise2(kind === 'moon' ? 71 : kind === 'mars' ? 137 : 211),
+      noiseB: makeNoise2(kind === 'moon' ? 211 : kind === 'mars' ? 311 : 401),
+      craters: []
+    };
+    if (kind === 'moon') {
+      var rand = mulberry32(9001);
+      for (var i = 0; i < 34; i++) {
+        var a = rand() * Math.PI * 2;
+        var r = 12 + rand() * 176;
+        ctx.craters.push({
+          x: Math.cos(a) * r,
+          z: Math.sin(a) * r,
+          r: 3.5 + rand() * 18,
+          depth: 2.6 + rand() * 4.4,
+          rim: 0.6 + rand() * 1.0
+        });
+      }
+    }
+    return ctx;
+  }
+
+  function terrainHeight(ctx, kind, x, z) {
+    var h = 0;
+    var d = Math.sqrt(x * x + z * z);
+    var edge = clamp01(d / TERRAIN_EDGE);
+    if (kind === 'earth') {
+      h = (fbm(ctx.noiseA, x * 0.012, z * 0.012, 4) - 0.5) * 6.0;
+      h += (ctx.noiseB(x * 0.07, z * 0.07) - 0.5) * 0.6;
+      h += easeSoft(edge) * (fbm(ctx.noiseA, x * 0.004 + 9, z * 0.004, 3) - 0.35) * 16;
+    } else if (kind === 'moon') {
+      h = (fbm(ctx.noiseA, x * 0.02, z * 0.02, 3) - 0.5) * 2.0;
+      for (var i = 0; i < ctx.craters.length; i++) {
+        var cr = ctx.craters[i];
+        var dx = x - cr.x, dz = z - cr.z;
+        var u = Math.sqrt(dx * dx + dz * dz) / cr.r;
+        if (u < 2.1) {
+          if (u < 1) {
+            var bowl = 1 - u * u;
+            h -= cr.depth * bowl * bowl;
+          }
+          var rimD = (u - 1) / 0.3;
+          h += cr.rim * Math.exp(-rimD * rimD);
+        }
+      }
+      // Distant highlands: a soft ridge ring that gives the horizon depth.
+      h += easeSoft(clamp01((edge - 0.68) / 0.32)) * (fbm(ctx.noiseB, x * 0.006, z * 0.006, 3) * 14 - 3);
+    } else {
+      // Mars: noise-warped dunes running roughly north-east.
+      var warp = fbm(ctx.noiseB, x * 0.01, z * 0.01, 3);
+      var dune = Math.sin((x * 0.75 + z * 0.42) * 0.09 + warp * 5.4);
+      h = dune * 2.2 + (fbm(ctx.noiseA, x * 0.025, z * 0.025, 4) - 0.5) * 3.4;
+      h += easeSoft(edge) * (fbm(ctx.noiseA, x * 0.006, z * 0.006 + 4, 3) - 0.4) * 9;
+    }
+    // Flat apron: actors (lander, rover, astronaut, pad deck) always stand on
+    // level ground; the landscape starts rolling just outside it.
+    var flat = clamp01((d - 10) / 14);
+    return h * easeSoft(flat);
+  }
+
+  function makeBumpTexture() {
+    var S = 256;
+    var c = makeCanvas(S, S);
+    var ctx = c.getContext('2d');
+    var img = ctx.createImageData(S, S);
+    var noise = makeNoise2(1234);
+    for (var y = 0; y < S; y++) {
+      for (var x = 0; x < S; x++) {
+        var v = fbm(noise, x * 0.075, y * 0.075, 4);
+        var g = Math.round(80 + v * 140);
+        var i = (y * S + x) * 4;
+        img.data[i] = g;
+        img.data[i + 1] = g;
+        img.data[i + 2] = g;
+        img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+    tex.repeat.set(16, 16);
+    return tex;
+  }
+
+  function terrainPalette(kind) {
+    if (kind === 'moon') {
+      return { a: srgb(0x7c828a), b: srgb(0x60666e), low: srgb(0x4c525a), hi: srgb(0x9298a0) };
+    }
+    if (kind === 'mars') {
+      return { a: srgb(0x8f3f20), b: srgb(0x6b2c18), low: srgb(0x542314), hi: srgb(0xa85a34) };
+    }
+    return { a: srgb(0x3d6029), b: srgb(0x566a2f), low: srgb(0x433a28), hi: srgb(0x6f8140) };
+  }
+
+  function addBoulders(group, kind, ctx) {
+    var rand = mulberry32(kind === 'earth' ? 55 : kind === 'moon' ? 66 : 77);
+    var colors = { earth: 0x6b6152, moon: 0x767c85, mars: 0x7c3a22 };
+    var mat = new THREE.MeshStandardMaterial({
+      color: srgb(colors[kind] || 0x6b6152), roughness: 1, flatShading: true
+    });
+    var count = kind === 'earth' ? 20 : 16;
+    for (var i = 0; i < count; i++) {
+      var ang = rand() * Math.PI * 2;
+      var rad = 26 + rand() * 170;
+      var x = Math.cos(ang) * rad;
+      var z = Math.sin(ang) * rad;
+      var size = 0.55 + rand() * (kind === 'moon' ? 2.4 : 2.0);
+      var rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), mat);
+      rock.position.set(x, terrainHeight(ctx, kind, x, z) + size * 0.28, z);
+      rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+      rock.scale.y = 0.6 + rand() * 0.7;
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      group.add(rock);
+    }
+    // Pebble scatter: tiny stones make the ground read at close range.
+    for (var p = 0; p < 26; p++) {
+      var pa = rand() * Math.PI * 2;
+      var pr = 6 + rand() * 70;
+      var px = Math.cos(pa) * pr, pz = Math.sin(pa) * pr;
+      var ps = 0.12 + rand() * 0.34;
+      var pebble = new THREE.Mesh(new THREE.DodecahedronGeometry(ps, 0), mat);
+      pebble.position.set(px, terrainHeight(ctx, kind, px, pz) + ps * 0.4, pz);
+      pebble.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+      pebble.castShadow = true;
+      group.add(pebble);
+    }
+    if (kind === 'earth') {
+      // Scrub clumps: cheap dark-green icosahedra that read as vegetation.
+      var bushMat = new THREE.MeshStandardMaterial({ color: srgb(0x3d5c31), roughness: 1, flatShading: true });
+      for (var b = 0; b < 14; b++) {
+        var ba = rand() * Math.PI * 2;
+        var br = 30 + rand() * 150;
+        var bx = Math.cos(ba) * br, bz = Math.sin(ba) * br;
+        var bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.7 + rand() * 1.1, 0), bushMat);
+        bush.position.set(bx, terrainHeight(ctx, kind, bx, bz) + 0.35, bz);
+        bush.scale.set(1.2, 0.7, 1.2);
+        bush.castShadow = true;
+        group.add(bush);
+      }
+    }
+  }
+
+  function createTerrainGroup(kind) {
+    var ctx = terrainContext(kind);
+    var geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEG, TERRAIN_SEG);
+    geo.rotateX(-Math.PI / 2);
+    var pos = geo.attributes.position;
+    var colors = new Float32Array(pos.count * 3);
+    var pal = terrainPalette(kind);
+    var col = new THREE.Color();
+    var minH = 0, maxH = 0;
+    for (var i = 0; i < pos.count; i++) {
+      var x = pos.getX(i);
+      var z = pos.getZ(i);
+      var h = terrainHeight(ctx, kind, x, z);
+      pos.setY(i, h);
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+    }
+    for (var j = 0; j < pos.count; j++) {
+      var x2 = pos.getX(j);
+      var z2 = pos.getZ(j);
+      var h2 = pos.getY(j);
+      var n = fbm(ctx.noiseB, x2 * 0.09 + 3, z2 * 0.09 + 5, 3);
+      var t = clamp01((h2 - minH) / Math.max(0.001, maxH - minH));
+      if (kind === 'moon') {
+        // Crater floors darken from local depth (not the global height range),
+        // rims catch light, and low-frequency noise paints the maria.
+        var maria = ctx.noiseA(x2 * 0.012 + 11, z2 * 0.012 + 7);
+        col.copy(pal.b).lerp(pal.a, n);
+        col.lerp(pal.low, clamp01(-h2 / 3.0) * 0.9);
+        col.lerp(pal.hi, clamp01((h2 - 0.5) / 2.2) * 0.75);
+        col.lerp(pal.low, clamp01((maria - 0.5) * 2.6) * 0.7);
+      } else if (kind === 'mars') {
+        var mpatch = fbm(ctx.noiseB, x2 * 0.022 + 5, z2 * 0.022 + 9, 3);
+        col.copy(pal.b).lerp(pal.a, clamp01(n * 1.3));
+        col.lerp(pal.low, clamp01((mpatch - 0.5) * 3.0) * 0.85);
+        col.lerp(pal.hi, clamp01((0.47 - mpatch) * 2.4) * 0.6);
+        col.lerp(pal.hi, clamp01((h2 - 1.4) / 3.0) * 0.55);
+      } else {
+        var patch = fbm(ctx.noiseA, x2 * 0.028 + 17, z2 * 0.028 + 3, 3);
+        col.copy(pal.a).lerp(pal.b, clamp01(n * 1.5));
+        col.lerp(pal.hi, clamp01((patch - 0.5) * 3.0) * 0.9);
+        col.lerp(pal.low, clamp01((0.46 - patch) * 2.2) * 0.7);
+        col.lerp(pal.low, clamp01((0.42 - t) * 1.2) * 0.5);
+      }
+      colors[j * 3] = col.r;
+      colors[j * 3 + 1] = col.g;
+      colors[j * 3 + 2] = col.b;
+    }
+    pos.needsUpdate = true;
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+
+    if (!world.terrainBump) world.terrainBump = makeBumpTexture();
+    var mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 1.0, metalness: 0.0,
+      bumpMap: world.terrainBump, bumpScale: 0.32
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+
+    var group = new THREE.Group();
+    group.add(mesh);
+    addBoulders(group, kind, ctx);
+    group.visible = false;
+    scene.add(group);
+    return group;
+  }
+
+  function createTerrains() {
+    world.terrains = {
+      earth: createTerrainGroup('earth'),
+      moon: createTerrainGroup('moon'),
+      mars: createTerrainGroup('mars')
+    };
+  }
+
+  function showTerrain(kind) {
+    if (!world.terrains) return;
+    for (var k in world.terrains) {
+      if (!Object.prototype.hasOwnProperty.call(world.terrains, k)) continue;
+      world.terrains[k].visible = (k === kind);
+    }
+  }
+
+  // Single entry point for "what world am I in". Swaps sky, fog, lights,
+  // terrain and dust colour together so a scene can never be half-transitioned.
+  function applyLocale(kind) {
+    var key = LOCALES[kind] ? kind : 'earth';
+    var L = LOCALES[key];
+    currentLocale = key;
+    if (!scene) return;
+
+    if (world.sky) {
+      world.sky.material.map = makeSkyTexture(key);
+      world.sky.material.needsUpdate = true;
+    }
+    scene.background = new THREE.Color().copy(srgb(L.bg));
+    scene.fog = L.fog === null ? null : new THREE.Fog(L.fog, L.fogNear, L.fogFar);
+
+    if (world.hemi) {
+      world.hemi.color.copy(srgb(L.hemiSky));
+      world.hemi.groundColor.copy(srgb(L.hemiGround));
+      world.hemi.intensity = L.hemiI;
+    }
+    if (world.ambient) world.ambient.intensity = L.ambI;
+    if (world.key) {
+      world.key.color.copy(srgb(L.keyColor));
+      world.key.intensity = L.keyI;
+    }
+    if (world.fill) {
+      world.fill.color.copy(srgb(L.fillColor));
+      world.fill.intensity = L.fillI;
+    }
+    if (world.rim) {
+      world.rim.color.copy(srgb(L.rimColor));
+      world.rim.intensity = L.rimI;
+    }
+    if (world.stars) world.stars.visible = !!L.stars;
+    if (world.stars2) world.stars2.visible = !!L.stars;
+
+    showTerrain(L.terrain || null);
+    // No ground in space: the pad hardware must never float in the void.
+    if (world.padGroup && !L.terrain) world.padGroup.visible = false;
+
+    // Backdrop bodies: show the ones that make sense from where you stand.
+    // (In space everything is visible so an approach can frame its target.)
+    var planetVis = PLANET_VISIBILITY[key] || PLANET_VISIBILITY.space;
+    if (world.earthParts) {
+      for (var ei = 0; ei < world.earthParts.length; ei++) {
+        world.earthParts[ei].visible = !!planetVis.earth;
+      }
+    }
+    if (world.moon) world.moon.visible = !!planetVis.moon;
+    if (world.mars) world.mars.visible = !!planetVis.mars;
+    if (world.saturn) world.saturn.visible = !!planetVis.saturn;
+    if (world.saturnRing) world.saturnRing.visible = !!planetVis.saturn;
+
+    // Launch smoke/dust belongs to the ground; it must not hang in orbit.
+    if (effects.smoke) effects.smoke.points.visible = !!L.terrain;
+    if (effects.dust) effects.dust.points.visible = !!L.terrain;
+
+    // The image-capture rock takes the local rock colour.
+    if (surface.poi && surface.poi.material) {
+      surface.poi.material.color.copy(srgb(key === 'mars' ? 0x7e4a34 :
+        key === 'moon' ? 0x8b9099 : 0x6b5a4d));
+    }
+
+    if (effects.dust && effects.dust.points) {
+      effects.dust.points.material.uniforms.uColor.value.copy(srgb(L.dust));
+    }
+    if (renderer) renderer.toneMappingExposure = L.exposure;
+  }
+
+  function localeForDestination(destKey) {
+    var k = String(destKey || '').toLowerCase();
+    if (k.indexOf('moon') !== -1 || k.indexOf('luna') !== -1) return 'moon';
+    if (k.indexOf('mars') !== -1) return 'mars';
+    if (k.indexOf('earth') !== -1) return 'earth';
+    return 'moon';
+  }
+
+  function localeForPhase(phase) {
+    var p = String(phase || '').toLowerCase();
+    if (!p) return currentLocale;
+    if (PAD_PHASES[p] || p.indexOf('pad') !== -1) return 'earth';
+    if (p.indexOf('ascent') !== -1 || p.indexOf('liftoff') !== -1 ||
+        p.indexOf('climb') !== -1) return 'earth';
+    // Still over the pad at staging altitude: the sky/ground stay terrestrial.
+    if (p.indexOf('stage') !== -1 || p.indexOf('separation') !== -1) return 'earth';
+    return 'space';
   }
 
   // Procedural helpers -- always available so no sphere is ever black/blank.
@@ -609,6 +1156,130 @@ SMG.scene = (function () {
     return tex;
   }
 
+  function makePlanetTexture(kind) {
+    var W = 1024, H = 512;
+    var c = makeCanvas(W, H);
+    var ctx = c.getContext('2d');
+    var rand = mulberry32(kind === 'moon' ? 4242 : 8484);
+    var i, r;
+    if (kind === 'moon') {
+      ctx.fillStyle = '#9aa0a8';
+      ctx.fillRect(0, 0, W, H);
+      // Maria: the big dark basalt plains.
+      for (i = 0; i < 22; i++) {
+        ctx.globalAlpha = 0.12 + rand() * 0.14;
+        ctx.fillStyle = '#6e747d';
+        var mx = rand() * W, my = 70 + rand() * (H - 140);
+        var mr = 40 + rand() * 130;
+        ctx.beginPath();
+        ctx.ellipse(mx, my, mr, mr * (0.45 + rand() * 0.4), rand() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Craters: dark floor + bright rim.
+      for (i = 0; i < 420; i++) {
+        r = 1.5 + rand() * (rand() < 0.92 ? 9 : 22);
+        var cx = rand() * W, cy = rand() * H;
+        ctx.globalAlpha = 0.28;
+        ctx.fillStyle = '#6b7078';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.4;
+        ctx.strokeStyle = '#cdd2d8';
+        ctx.lineWidth = Math.max(0.6, r * 0.16);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // Polar brightening.
+      var pg = ctx.createLinearGradient(0, 0, 0, H);
+      pg.addColorStop(0, 'rgba(240,244,248,0.35)');
+      pg.addColorStop(0.12, 'rgba(240,244,248,0)');
+      pg.addColorStop(0.88, 'rgba(240,244,248,0)');
+      pg.addColorStop(1, 'rgba(240,244,248,0.35)');
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = pg;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.fillStyle = '#b4552f';
+      ctx.fillRect(0, 0, W, H);
+      // Dark basaltic regions.
+      for (i = 0; i < 42; i++) {
+        ctx.globalAlpha = 0.18 + rand() * 0.24;
+        ctx.fillStyle = rand() < 0.58 ? '#6d2f1a' : '#cf8352';
+        var dx = rand() * W, dy = 50 + rand() * (H - 100);
+        var dr = 26 + rand() * 160;
+        ctx.beginPath();
+        ctx.ellipse(dx, dy, dr, dr * (0.25 + rand() * 0.55), rand() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Valles Marineris-style scars: a long canyon plus tributaries.
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = '#5e2716';
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(W * 0.16, H * 0.56);
+      ctx.bezierCurveTo(W * 0.3, H * 0.5, W * 0.42, H * 0.62, W * 0.56, H * 0.55);
+      ctx.stroke();
+      for (i = 0; i < 90; i++) {
+        ctx.globalAlpha = 0.12 + rand() * 0.2;
+        ctx.strokeStyle = '#6e2f1c';
+        ctx.lineWidth = 0.8 + rand() * 3.4;
+        var sx = rand() * W, sy = 80 + rand() * (H - 160);
+        var sl = 30 + rand() * 150;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.bezierCurveTo(sx + sl * 0.3, sy + (rand() - 0.5) * 24,
+          sx + sl * 0.7, sy + (rand() - 0.5) * 30, sx + sl, sy + (rand() - 0.5) * 18);
+        ctx.stroke();
+      }
+      // Fine dust grain so the disc never looks like flat vector art.
+      for (i = 0; i < 5000; i++) {
+        ctx.globalAlpha = 0.03 + rand() * 0.05;
+        ctx.fillStyle = rand() < 0.5 ? '#ffffff' : '#3c160c';
+        ctx.fillRect(rand() * W, rand() * H, 1 + rand() * 2, 1 + rand() * 2);
+      }
+      // Polar ice caps.
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = '#f0e6dd';
+      ctx.beginPath();
+      ctx.ellipse(W * 0.5, 6, W * 0.34, 26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(W * 0.5, H - 6, W * 0.26, 20, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    return canvasTexture(c);
+  }
+
+  function makeCloudTexture() {
+    var W = 1024, H = 512;
+    var c = makeCanvas(W, H);
+    var ctx = c.getContext('2d');
+    var img = ctx.createImageData(W, H);
+    var noise = makeNoise2(777);
+    // Cylinder-mapped fbm: sampling on a circle in x means no visible seam.
+    for (var y = 0; y < H; y++) {
+      var lat = Math.abs(y / H - 0.5) * 2;          // 0 equator .. 1 pole
+      var band = 0.5 + 0.5 * Math.cos(lat * Math.PI * 2.1);
+      for (var x = 0; x < W; x++) {
+        var ang = (x / W) * Math.PI * 2;
+        var nx = Math.cos(ang) * 2.4;
+        var nz = Math.sin(ang) * 2.4;
+        var v = fbm(noise, nx * 1.7 + y * 0.0035, nz * 1.7 - y * 0.0035, 5);
+        var a = clamp01((v - 0.5) * 3.4) * (0.25 + band * 0.75);
+        var i = (y * W + x) * 4;
+        img.data[i] = 255;
+        img.data[i + 1] = 255;
+        img.data[i + 2] = 255;
+        img.data[i + 3] = Math.round(clamp01(a) * 235);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvasTexture(c);
+  }
+
   function createPlanets() {
     // Static anchors: no spin, no orbit, no bounce. Only the camera moves.
     // Positions are chosen so Earth/Moon/Mars read from the pad AND the orbit
@@ -616,54 +1287,89 @@ SMG.scene = (function () {
     world.planets = {};
 
     // Earth -- images.jpeg (2:1) as sphere colour map, procedural blue fallback.
+    // Backdrop bodies are UNLIT map materials: the scene sun is tuned for the
+    // foreground, and lighting a distant globe with it blows the map out.
     var earthGeo = new THREE.SphereGeometry(400, 48, 32);
-    var earthMat = new THREE.MeshStandardMaterial({
-      color: 0x2f66b5, roughness: 0.92, metalness: 0.0
-    });
+    var earthMat = new THREE.MeshBasicMaterial({ color: srgb(0x2f66b5), fog: false });
     world.earth = new THREE.Mesh(earthGeo, earthMat);
-    world.earth.position.set(-500, 430, -1450);
+    world.earth.position.set(-820, 600, -2900);
+    // Sphere UVs put the Pacific at the camera-facing hemisphere; spin the
+    // globe so Africa/Europe read instead of a flat blue ocean disc.
+    world.earth.rotation.y = -Math.PI / 2;
+    world.earth.rotation.z = 0.41;        // 23.5 deg axial tilt
     scene.add(world.earth);
     world.planets.earth = { mesh: world.earth, pos: world.earth.position, r: 400 };
 
-    // Restrained atmospheric rim glow (additive shell, back faces only).
-    var glowGeo = new THREE.SphereGeometry(416, 40, 26);
-    var glowMat = new THREE.MeshBasicMaterial({
-      color: 0x6fb0ff, transparent: true, opacity: 0.16,
-      blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false
+    // Atmospheric rim: a Fresnel shader on a thin shell. This glows ONLY at
+    // the silhouette -- an additive ball would wash the whole planet out.
+    var glowGeo = new THREE.SphereGeometry(406, 48, 32);
+    var glowMat = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: srgb(0x7fc0ff) } },
+      vertexShader: [
+        'varying vec3 vN;',
+        'varying vec3 vV;',
+        'void main() {',
+        '  vec4 wp = modelMatrix * vec4(position, 1.0);',
+        '  vN = normalize(mat3(modelMatrix) * normal);',
+        '  vV = normalize(cameraPosition - wp.xyz);',
+        '  gl_Position = projectionMatrix * viewMatrix * wp;',
+        '}'
+      ].join('\n'),
+      fragmentShader: [
+        'uniform vec3 uColor;',
+        'varying vec3 vN;',
+        'varying vec3 vV;',
+        'void main() {',
+        '  float rim = pow(1.0 - clamp(dot(vN, vV), 0.0, 1.0), 2.6);',
+        '  gl_FragColor = vec4(uColor, rim * 0.62);',
+        '}'
+      ].join('\n'),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.FrontSide
     });
     world.earthGlow = new THREE.Mesh(glowGeo, glowMat);
     world.earthGlow.position.copy(world.earth.position);
+    world.earthGlow.rotation.copy(world.earth.rotation);
     scene.add(world.earthGlow);
 
-    // Moon -- procedural cool grey (moon.jpeg is a 3:2 PHOTO, never a sphere map).
-    var moonMat = new THREE.MeshStandardMaterial({
-      color: 0x9aa0a8, roughness: 1.0, metalness: 0.0,
-      map: makeMottleTexture('#9aa0a8', '#7d838c', 40)
+    // Cloud shell: one extra sphere with a soft alpha map. This is what makes
+    // Earth read as a living world instead of a blue ball.
+    var cloudMat = new THREE.MeshBasicMaterial({
+      map: makeCloudTexture(), transparent: true, opacity: 0.42,
+      depthWrite: false, fog: false
     });
-    world.moon = new THREE.Mesh(new THREE.SphereGeometry(60, 36, 24), moonMat);
-    world.moon.position.set(-1050, 640, -1700);
-    scene.add(world.moon);
-    world.planets.moon = { mesh: world.moon, pos: world.moon.position, r: 60 };
+    world.earthClouds = new THREE.Mesh(new THREE.SphereGeometry(404, 48, 32), cloudMat);
+    world.earthClouds.position.copy(world.earth.position);
+    world.earthClouds.rotation.copy(world.earth.rotation);
+    scene.add(world.earthClouds);
+    world.earthParts = [world.earth, world.earthGlow, world.earthClouds];
 
-    // Mars -- procedural rust (mars.jpeg is a 3:2 PHOTO, used on cards/ground).
-    var marsMat = new THREE.MeshStandardMaterial({
-      color: 0xb4552f, roughness: 1.0, metalness: 0.0,
-      map: makeMottleTexture('#b4552f', '#8e3f22', 46)
-    });
-    world.mars = new THREE.Mesh(new THREE.SphereGeometry(92, 40, 26), marsMat);
-    world.mars.position.set(-960, 560, -1150);
+    // Moon -- procedural crater map (the repo's moon.jpeg is a 3:2 surface
+    // PHOTO, never a sphere map). The same canvas doubles as a bump map.
+    var moonTex = makePlanetTexture('moon');
+    var moonMat = new THREE.MeshBasicMaterial({ map: moonTex, fog: false });
+    world.moon = new THREE.Mesh(new THREE.SphereGeometry(70, 48, 32), moonMat);
+    world.moon.position.set(1500, 560, -2400);
+    scene.add(world.moon);
+    world.planets.moon = { mesh: world.moon, pos: world.moon.position, r: 70 };
+
+    // Mars -- procedural rust map with caps + canyons, used as colour + bump.
+    var marsTex = makePlanetTexture('mars');
+    var marsMat = new THREE.MeshBasicMaterial({ map: marsTex, fog: false });
+    world.mars = new THREE.Mesh(new THREE.SphereGeometry(100, 48, 32), marsMat);
+    world.mars.position.set(-1500, 700, -2500);
     scene.add(world.mars);
-    world.planets.mars = { mesh: world.mars, pos: world.mars.position, r: 92 };
+    world.planets.mars = { mesh: world.mars, pos: world.mars.position, r: 100 };
 
     // Saturn -- saturn.jpeg (2:1 band map) with procedural band fallback + ring.
-    var saturnMat = new THREE.MeshStandardMaterial({
-      color: 0xd9b877, roughness: 0.95, metalness: 0.0
-    });
-    world.saturn = new THREE.Mesh(new THREE.SphereGeometry(120, 44, 28), saturnMat);
-    world.saturn.position.set(760, 620, -1650);
+    var saturnMat = new THREE.MeshBasicMaterial({ color: srgb(0xd9b877), fog: false });
+    world.saturn = new THREE.Mesh(new THREE.SphereGeometry(140, 44, 28), saturnMat);
+    world.saturn.position.set(950, 820, -3300);
     world.saturn.rotation.z = 0.47;   // fixed axial tilt, never animated
     scene.add(world.saturn);
-    world.planets.saturn = { mesh: world.saturn, pos: world.saturn.position, r: 120 };
+    world.planets.saturn = { mesh: world.saturn, pos: world.saturn.position, r: 140 };
     world.saturnMat = saturnMat;
     world.saturnBands = makeBandTexture();
     saturnMat.map = world.saturnBands;
@@ -679,9 +1385,9 @@ SMG.scene = (function () {
       var d = (v3.length() - 150) / 90;
       uv.setXY(i, clamp01(d), 0.5);
     }
-    var ringMat = new THREE.MeshStandardMaterial({
-      color: 0xd9c294, roughness: 1.0, metalness: 0.0, side: THREE.DoubleSide,
-      transparent: true, opacity: 0.72, map: world.saturnBands
+    var ringMat = new THREE.MeshBasicMaterial({
+      color: srgb(0xd9c294), side: THREE.DoubleSide,
+      transparent: true, opacity: 0.72, map: world.saturnBands, fog: false
     });
     world.saturnRing = new THREE.Mesh(ringGeo, ringMat);
     world.saturnRing.position.copy(world.saturn.position);
@@ -694,33 +1400,35 @@ SMG.scene = (function () {
     world.padGroup = g;
     scene.add(g);
 
-    // Local ground disc (surface photos are never used here -- this is a disc,
-    // so a procedural colour is honest and cheap).
-    var groundMat = new THREE.MeshStandardMaterial({ color: 0x3d4350, roughness: 1.0 });
-    world.ground = new THREE.Mesh(new THREE.CircleGeometry(160, 48), groundMat);
-    world.ground.rotation.x = -Math.PI / 2;
-    world.ground.position.y = -0.02;
-    world.ground.receiveShadow = true;
-    g.add(world.ground);
+    // The ground itself is the locale terrain (world.terrains.earth) -- the pad
+    // group only owns the launch hardware that sits on it.
 
     // Launch deck
-    var deckMat = new THREE.MeshStandardMaterial({ color: 0x8f97a6, roughness: 0.75, metalness: 0.25 });
+    var deckMat = new THREE.MeshStandardMaterial({ color: srgb(0x7a828e), roughness: 0.78, metalness: 0.22 });
     world.deck = new THREE.Mesh(new THREE.CylinderGeometry(9, 10, PAD_Y, 28), deckMat);
     world.deck.position.y = PAD_Y / 2;
     world.deck.receiveShadow = true;
     world.deck.castShadow = true;
     g.add(world.deck);
 
-    // Flame trench hint
-    var trench = new THREE.Mesh(
-      new THREE.BoxGeometry(7, PAD_Y * 0.6, 20),
-      new THREE.MeshStandardMaterial({ color: 0x272b33, roughness: 1.0 })
-    );
-    trench.position.set(0, PAD_Y * 0.3, 14);
-    g.add(trench);
+    // Service road: the concrete ribbon that runs from the apron out to the
+    // grass. Reads as a launch complex instead of a floating dark slab.
+    var roadMat = new THREE.MeshStandardMaterial({ color: srgb(0x666d78), roughness: 0.96 });
+    var road = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.22, 16), roadMat);
+    road.position.set(0, 0.16, 19);
+    road.rotation.x = 0.035;
+    road.receiveShadow = true;
+    g.add(road);
+    var roadLineMat = new THREE.MeshStandardMaterial({ color: srgb(0xc9c27a), roughness: 0.9 });
+    for (var rl = -1; rl <= 1; rl += 2) {
+      var edgeLine = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 15), roadLineMat);
+      edgeLine.position.set(rl * 2.85, 0.30, 19);
+      edgeLine.rotation.x = 0.035;
+      g.add(edgeLine);
+    }
 
     // Service tower
-    var towerMat = new THREE.MeshStandardMaterial({ color: 0x5b6472, roughness: 0.7, metalness: 0.4 });
+    var towerMat = new THREE.MeshStandardMaterial({ color: srgb(0x5b6472), roughness: 0.7, metalness: 0.4 });
     var tower = new THREE.Group();
     var mast = new THREE.Mesh(new THREE.BoxGeometry(1.4, 30, 1.4), towerMat);
     mast.position.y = 15;
@@ -737,7 +1445,7 @@ SMG.scene = (function () {
 
     // Pad lights -- emissive bulbs (no extra realtime lights).
     world.padLightMat = new THREE.MeshStandardMaterial({
-      color: 0x22262e, emissive: 0xffd98a, emissiveIntensity: 1.1, roughness: 0.6
+      color: srgb(0x22262e), emissive: srgb(0xffd98a), emissiveIntensity: 1.1, roughness: 0.6
     });
     var bulbGeo = new THREE.SphereGeometry(0.34, 10, 8);
     world.padLights = [];
@@ -749,17 +1457,27 @@ SMG.scene = (function () {
       world.padLights.push(bulb);
     }
 
-    // A few static rocks for ground readability.
-    var rockMat = new THREE.MeshStandardMaterial({ color: 0x4a505c, roughness: 1.0 });
-    for (var r = 0; r < 10; r++) {
-      var rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1 + Math.random() * 2.4, 0), rockMat);
-      var ang = Math.random() * Math.PI * 2;
-      var rad = 34 + Math.random() * 90;
-      rock.position.set(Math.cos(ang) * rad, 0.4, Math.sin(ang) * rad);
-      rock.rotation.set(Math.random(), Math.random(), Math.random());
-      rock.receiveShadow = true;
-      g.add(rock);
-    }
+    // Concrete apron: reads as a real launch complex sitting on the grassland.
+    var apronMat = new THREE.MeshStandardMaterial({ color: srgb(0x5b626c), roughness: 0.95, metalness: 0.05 });
+    var apron = new THREE.Mesh(new THREE.CylinderGeometry(16, 17.5, 0.3, 48), apronMat);
+    apron.position.y = 0.13;
+    apron.receiveShadow = true;
+    g.add(apron);
+
+    var hazardMat = new THREE.MeshStandardMaterial({
+      color: srgb(0xd7b24a), roughness: 0.7, metalness: 0.1,
+      emissive: srgb(0x2a1f00), emissiveIntensity: 0.35
+    });
+    var hazard = new THREE.Mesh(new THREE.TorusGeometry(8.6, 0.12, 6, 64), hazardMat);
+    hazard.rotation.x = Math.PI / 2;
+    hazard.position.y = 2.34;
+    g.add(hazard);
+
+    var ringMat = new THREE.MeshStandardMaterial({ color: srgb(0x5d636d), roughness: 0.9 });
+    var safetyRing = new THREE.Mesh(new THREE.TorusGeometry(12.4, 0.18, 6, 72), ringMat);
+    safetyRing.rotation.x = Math.PI / 2;
+    safetyRing.position.y = 0.30;
+    g.add(safetyRing);
   }
 
   // --- Assets ---------------------------------------------------------------
@@ -841,33 +1559,36 @@ SMG.scene = (function () {
 
   function loadAssets() {
     loadTexture('earthMap', ASSETS.textures.earthMap, function (tex) {
-      if (world.earth && world.earth.material) {
-        world.earth.material.map = tex;
-        world.earth.material.color.set(0xffffff);
-        world.earth.material.needsUpdate = true;
+      if (!world.earth || !world.earth.material || !tex || !tex.image) return;
+      // The repo's Earth map is 318x159 -- fine from the pad, blurry on an
+      // approach close-up. Upscale through a canvas and add fine grain so the
+      // upscale never reads as a smeared JPEG. Continents stay authentic.
+      var c = makeCanvas(1024, 512);
+      var ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(tex.image, 0, 0, 1024, 512);
+      var rand = mulberry32(5150);
+      for (var i = 0; i < 5600; i++) {
+        ctx.globalAlpha = 0.03 + rand() * 0.05;
+        ctx.fillStyle = rand() < 0.5 ? '#ffffff' : '#000000';
+        ctx.fillRect(rand() * 1024, rand() * 512, 2 + rand() * 3, 2 + rand() * 3);
       }
+      ctx.globalAlpha = 1;
+      var up = canvasTexture(c);
+      world.earth.material.map = up;
+      world.earth.material.color.copy(srgb(0xffffff));
+      world.earth.material.needsUpdate = true;
     });
     loadTexture('saturnMap', ASSETS.textures.saturnMap, function (tex) {
       if (world.saturnMat) {
         world.saturnMat.map = tex;
-        world.saturnMat.color.set(0xffffff);
+        world.saturnMat.color.copy(srgb(0xffffff));
         world.saturnMat.needsUpdate = true;
       }
     });
-    loadTexture('marsPhoto', ASSETS.textures.marsPhoto, function (tex) {
-      if (surface.marsMat) {
-        surface.marsMat.map = tex;
-        surface.marsMat.color.set(0xffffff);
-        surface.marsMat.needsUpdate = true;
-      }
-    });
-    loadTexture('moonPhoto', ASSETS.textures.moonPhoto, function (tex) {
-      if (surface.moonMat) {
-        surface.moonMat.map = tex;
-        surface.moonMat.color.set(0xffffff);
-        surface.moonMat.needsUpdate = true;
-      }
-    });
+    // Surface photos are 3:2 landscape PHOTOs: perfect for the image-capture
+    // card, wrong for a ground plane (stretched, blurry). The terrain shader
+    // owns the ground now, so these are never mapped onto it.
 
     loadModel('landerLM', ASSETS.models.landerLM, 3.4, true, null);
     loadModel('station', ASSETS.models.station, 16, false, null);
@@ -889,16 +1610,16 @@ SMG.scene = (function () {
     rocket.group = g;
     scene.add(g);
 
-    rocket.matBody = new THREE.MeshStandardMaterial({ color: 0xf1f4f9, roughness: 0.42, metalness: 0.18 });
-    rocket.matDark = new THREE.MeshStandardMaterial({ color: 0x2c333f, roughness: 0.55, metalness: 0.55 });
-    rocket.matAccent = new THREE.MeshStandardMaterial({ color: 0xe2574c, roughness: 0.5, metalness: 0.1 });
-    rocket.matNozzle = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.35, metalness: 0.85 });
+    rocket.matBody = new THREE.MeshStandardMaterial({ color: srgb(0xf1f4f9), roughness: 0.42, metalness: 0.18 });
+    rocket.matDark = new THREE.MeshStandardMaterial({ color: srgb(0x2c333f), roughness: 0.55, metalness: 0.55 });
+    rocket.matAccent = new THREE.MeshStandardMaterial({ color: srgb(0xe2574c), roughness: 0.5, metalness: 0.1 });
+    rocket.matNozzle = new THREE.MeshStandardMaterial({ color: srgb(0x3a3f4a), roughness: 0.35, metalness: 0.85 });
     rocket.matWindow = new THREE.MeshStandardMaterial({
-      color: 0x9fd8ff, emissive: 0x2a5f8f, emissiveIntensity: 0.9,
+      color: srgb(0x9fd8ff), emissive: srgb(0x2a5f8f), emissiveIntensity: 0.9,
       roughness: 0.2, metalness: 0.1
     });
     rocket.matFuelFill = new THREE.MeshBasicMaterial({
-      color: 0x49d8ff, transparent: true, opacity: 0.85, depthWrite: false
+      color: srgb(0x49d8ff), transparent: true, opacity: 0.85, depthWrite: false
     });
 
     // --- lower stage (first stage: body, fins, engines, its own flame) ---
@@ -918,6 +1639,17 @@ SMG.scene = (function () {
     var skirt = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.32, 0.8, 26), rocket.matDark);
     skirt.position.y = 0.55;
     lower.add(skirt);
+
+    // Interstage collar + two panel seams: breaks up the plain white tube.
+    var collar = new THREE.Mesh(new THREE.CylinderGeometry(1.53, 1.53, 0.42, 26), rocket.matDark);
+    collar.position.y = 5.34;
+    lower.add(collar);
+    var seamGeo = new THREE.CylinderGeometry(1.508, 1.508, 0.05, 26);
+    for (var sm = 0; sm < 2; sm++) {
+      var seam = new THREE.Mesh(seamGeo, rocket.matDark);
+      seam.position.y = 1.85 + sm * 1.9;
+      lower.add(seam);
+    }
 
     // three fins (shared geometry, instanced)
     var finGeo = new THREE.BoxGeometry(0.18, 1.9, 1.6);
@@ -1012,7 +1744,7 @@ SMG.scene = (function () {
 
     // warning beacon (sensor_fault) -- gentle amber blink, never strobing
     rocket.beaconMat = new THREE.MeshStandardMaterial({
-      color: 0x332211, emissive: 0xffb347, emissiveIntensity: 0.0, roughness: 0.5
+      color: srgb(0x332211), emissive: srgb(0xffb347), emissiveIntensity: 0.0, roughness: 0.5
     });
     rocket.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), rocket.beaconMat);
     rocket.beacon.position.set(0, 9.6, 1.4);
@@ -1038,13 +1770,13 @@ SMG.scene = (function () {
     var outerGeo = new THREE.ConeGeometry(radius, len, 14, 1, true);
     outerGeo.translate(0, -len / 2, 0);        // pivot at the nozzle, tip down
     var outer = new THREE.Mesh(outerGeo, new THREE.MeshBasicMaterial({
-      color: 0xff8a2a, transparent: true, opacity: 0.7,
+      color: srgb(0xff8a2a), transparent: true, opacity: 0.7,
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     }));
     var innerGeo = new THREE.ConeGeometry(radius * 0.55, len * 0.7, 12, 1, true);
     innerGeo.translate(0, -len * 0.35, 0);
     var inner = new THREE.Mesh(innerGeo, new THREE.MeshBasicMaterial({
-      color: 0xfff3c4, transparent: true, opacity: 0.85,
+      color: srgb(0xfff3c4), transparent: true, opacity: 0.85,
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     }));
     outer.frustumCulled = false;
@@ -1063,9 +1795,9 @@ SMG.scene = (function () {
       group.add(inner);
       group.userData.kind = 'gltf';
     } else {
-      var bodyMat = new THREE.MeshStandardMaterial({ color: 0xdfe4ec, roughness: 0.5, metalness: 0.4 });
+      var bodyMat = new THREE.MeshStandardMaterial({ color: srgb(0xdfe4ec), roughness: 0.5, metalness: 0.4 });
       var panelMat = new THREE.MeshStandardMaterial({
-        color: 0x1f3d8f, emissive: 0x0a1a44, emissiveIntensity: 0.5,
+        color: srgb(0x1f3d8f), emissive: srgb(0x0a1a44), emissiveIntensity: 0.5,
         roughness: 0.35, metalness: 0.3
       });
       var body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), bodyMat);
@@ -1379,15 +2111,15 @@ SMG.scene = (function () {
 
   function createEffects() {
     var lowEnd = reducedMotion;
-    effects.smoke = makePool(lowEnd ? 120 : 300, { color: 0xb9c0cc, opacity: 0.5, additive: false });
-    effects.dust = makePool(lowEnd ? 90 : 220, { color: 0xc9a97e, opacity: 0.6, additive: false });
-    effects.glow = makePool(lowEnd ? 50 : 120, { color: 0x9fe4ff, opacity: 0.9, additive: true });
+    effects.smoke = makePool(lowEnd ? 120 : 300, { color: srgb(0xb9c0cc), opacity: 0.5, additive: false });
+    effects.dust = makePool(lowEnd ? 90 : 220, { color: srgb(0xc9a97e), opacity: 0.6, additive: false });
+    effects.glow = makePool(lowEnd ? 50 : 120, { color: srgb(0x9fe4ff), opacity: 0.9, additive: true });
 
     // Data packets: pre-made meshes reused every run (rover -> lander -> relay).
     effects.packets = [];
     var pGeo = new THREE.SphereGeometry(0.3, 8, 6);
     var pMat = new THREE.MeshBasicMaterial({
-      color: 0x7ff0ff, transparent: true, opacity: 0.95,
+      color: srgb(0x7ff0ff), transparent: true, opacity: 0.95,
       blending: THREE.AdditiveBlending, depthWrite: false
     });
     for (var i = 0; i < 12; i++) {
@@ -1400,7 +2132,7 @@ SMG.scene = (function () {
 
     // Shutter flash: a camera-attached quad (no DOM class invention, no strobe).
     var flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0,
+      color: srgb(0xffffff), transparent: true, opacity: 0,
       depthTest: false, depthWrite: false
     });
     effects.flash = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), flashMat);
@@ -1408,11 +2140,14 @@ SMG.scene = (function () {
     effects.flash.renderOrder = 999;
     effects.flash.frustumCulled = false;
     effects.flash.visible = false;
-    camera.add(effects.flash);
+    // Scene-level HUD: camera children are not reliably rendered here, so the
+    // quad is parented to the scene and re-pinned in front of the camera each
+    // frame (see syncCameraHud).
+    scene.add(effects.flash);
 
     // Capture reticle: a thin ring placed in the world at the point of interest.
     var retMat = new THREE.MeshBasicMaterial({
-      color: 0x8ff3ff, transparent: true, opacity: 0,
+      color: srgb(0x8ff3ff), transparent: true, opacity: 0,
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     });
     effects.reticle = new THREE.Mesh(new THREE.RingGeometry(0.8, 0.95, 32), retMat);
@@ -1420,33 +2155,48 @@ SMG.scene = (function () {
     effects.reticle.frustumCulled = false;
     scene.add(effects.reticle);
 
+    createWarp();
+
     effects.dustTargetY = -1;   // >=0 while a descent wants ground dust
   }
 
   function emitSmokeTrail(dt, level) {
     if (!rocket.flameLower || !rocket.group) return;
-    var n = level > 0.6 ? 3 : 2;
-    var count = Math.max(1, Math.round(n * dt * 60 * (reducedMotion ? 0.4 : 1)));
-    if (count > 6) count = 6;
     var px = rocket.group.position.x;
     var pz = rocket.group.position.z;
+    var py = rocket.group.position.y;
     // emit from whichever engine is burning (upper bell after separation)
     var upperBurning = (rocket.upperFlameLevel || 0) > 0.1;
-    var baseY = rocket.group.position.y + (upperBurning ? 5.0 : -0.4);
-    for (var i = 0; i < count; i++) {
-      effects.smoke.spawn(
-        px + (Math.random() - 0.5) * 1.2,
-        Math.max(baseY, PAD_Y * 0.4) + (Math.random() - 0.5) * 0.8,
-        pz + (Math.random() - 0.5) * 1.2,
-        (Math.random() - 0.5) * 2.4,
-        -2.5 - Math.random() * 3 - (baseY > 8 ? 0 : 1.5),
-        (Math.random() - 0.5) * 2.4,
-        1.6 + Math.random() * 1.8,
-        1.4 + Math.random() * 1.1,
-        2.6,
-        1.6
-      );
+    var offY = upperBurning ? 5.0 : -0.4;
+
+    // A fast-climbing rocket moves further per frame than a puff is wide, so
+    // stamp puffs along the segment flown since the last frame. Without this
+    // the trail reads as a dotted line of disconnected blobs.
+    var lastY = isNum(rocket.lastSmokeY) ? rocket.lastSmokeY : py;
+    if (Math.abs(py - lastY) > 40) lastY = py;      // after a skip/reset
+    var span = Math.abs(py - lastY);
+    var steps = Math.max(1, Math.min(6, Math.round(span / 1.5)));
+    var n = level > 0.6 ? 2 : 1;
+
+    for (var s = 0; s < steps; s++) {
+      var sy = lastY + (py - lastY) * ((s + 1) / steps);
+      var count = Math.max(1, Math.round(n * (reducedMotion ? 0.4 : 1)));
+      for (var i = 0; i < count; i++) {
+        effects.smoke.spawn(
+          px + (Math.random() - 0.5) * 1.3,
+          Math.max(sy + offY, PAD_Y * 0.4) + (Math.random() - 0.5) * 0.9,
+          pz + (Math.random() - 0.5) * 1.3,
+          (Math.random() - 0.5) * 2.2,
+          -2.0 - Math.random() * 2.6 - (sy + offY > 8 ? 0 : 1.4),
+          (Math.random() - 0.5) * 2.2,
+          2.1 + Math.random() * 2.0,
+          1.7 + Math.random() * 1.2,
+          3.2,
+          1.5
+        );
+      }
     }
+    rocket.lastSmokeY = py;
   }
 
   function emitDustBurst(x, y, z, strength) {
@@ -1554,6 +2304,12 @@ SMG.scene = (function () {
     effects.dustTargetY = -1;
     if (effects.reticle) effects.reticle.visible = false;
     if (effects.flash) { effects.flash.visible = false; effects.flash.material.opacity = 0; }
+    if (effects.warp) {
+      effects.warp.visible = false;
+      if (effects.warp.material.userData.base) {
+        effects.warp.material.color.copy(effects.warp.material.userData.base).multiplyScalar(0);
+      }
+    }
     if (effects.packets) {
       for (var i = 0; i < effects.packets.length; i++) {
         effects.packets[i].active = false;
@@ -1580,8 +2336,92 @@ SMG.scene = (function () {
     });
   }
 
-  function showReticle(pos, token) {
-    if (!effects.reticle) return;
+  // Warp streaks: camera-attached line burst used when the scene cuts to a
+  // different place (Earth -> space, space -> surface). Two-phase tween:
+  // surge in, ease out. Deterministic geometry, no allocation per run.
+  function createWarp() {
+    var count = reducedMotion ? 50 : 150;
+    var positions = new Float32Array(count * 6);
+    var rand = mulberry32(3131);
+    // Screen-space radial streaks: a ring of short lines in a plane in front
+    // of the camera. Reads as a jump to lightspeed without any post-processing.
+    for (var i = 0; i < count; i++) {
+      var a = rand() * Math.PI * 2;
+      var z = -4 - rand() * 8;
+      var r1 = 0.25 + rand() * 1.7;
+      var r2 = r1 + 1.2 + rand() * 3.8;
+      var ca = Math.cos(a), sa = Math.sin(a);
+      positions[i * 6] = ca * r1;
+      positions[i * 6 + 1] = sa * r1;
+      positions[i * 6 + 2] = z;
+      positions[i * 6 + 3] = ca * r2;
+      positions[i * 6 + 4] = sa * r2;
+      positions[i * 6 + 5] = z;
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    // NOTE: this material is created fully visible and faded by scaling its
+    // colour toward black (additive blending -> black adds nothing). Opacity
+    // animation on this object silently failed to render.
+    var mat = new THREE.LineBasicMaterial({
+      color: srgb(0xd8ecff), transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false
+    });
+    mat.userData.base = mat.color.clone();
+    var lines = new THREE.LineSegments(geo, mat);
+    lines.frustumCulled = false;
+    lines.renderOrder = 998;
+    lines.visible = false;
+    scene.add(lines);
+    effects.warp = lines;
+  }
+
+  function warpBurst(token, peak, dur) {
+    var w = effects.warp;
+    if (!w) return;
+    var d = isNum(dur) ? dur : 1.0;
+    var p = isNum(peak) ? peak : 0.75;
+    var base = w.material.userData.base || w.material.color.clone();
+    w.material.userData.base = base;
+    w.visible = true;
+    w.material.color.copy(base).multiplyScalar(0);
+    w.scale.set(0.85, 0.85, 1);
+    addTween({
+      from: 0, to: p, dur: d * 0.3, token: token, ease: easeInQuad,
+      onUpdate: function (v) {
+        var k = p > 0 ? clamp01(v / p) : 0;
+        w.material.color.copy(base).multiplyScalar(k);
+        var sc = 0.85 + k * 0.5;
+        w.scale.set(sc, sc, 1);
+      },
+      onComplete: function () {
+        addTween({
+          from: p, to: 0, dur: d * 0.7, token: token, ease: easeOutCubic,
+          onUpdate: function (v) {
+            var k = p > 0 ? clamp01(v / p) : 0;
+            w.material.color.copy(base).multiplyScalar(k);
+            var sc = 0.85 + k * 0.5;
+            w.scale.set(sc, sc, 1);
+          },
+          onComplete: function () {
+            w.visible = false;
+            w.material.color.copy(base).multiplyScalar(0);
+            w.scale.set(1, 1, 1);
+          }
+        });
+      }
+    });
+  }
+
+  // One call = swap the whole world + a short cinematic transition.
+  function localeCut(kind, token, opts) {
+    opts = opts || {};
+    applyLocale(kind);
+    if (opts.flash !== false) shutterFlash(token, isNum(opts.flashPeak) ? opts.flashPeak : 0.42);
+    if (opts.warp !== false) warpBurst(token, isNum(opts.warpPeak) ? opts.warpPeak : 0.7, 1.0);
+  }
+
+  function showReticle(pos, token) {    if (!effects.reticle) return;
     var r = effects.reticle;
     r.position.set(pos.x, pos.y, pos.z);
     r.visible = true;
@@ -1607,45 +2447,16 @@ SMG.scene = (function () {
 
   // --- Surface set -----------------------------------------------------------
   // Built ONCE at init, hidden by default, reset (not rebuilt) between clips.
+  // The ground itself lives in world.terrains and follows the locale; this
+  // group only carries the props that stand on it.
   function createSurface() {
     var g = new THREE.Group();
     g.visible = false;
     surface.group = g;
     scene.add(g);
 
-    // Two ground discs (mars/moon photos ARE usable here -- flat disc UVs),
-    // procedural colour until/if the photos load.
-    surface.marsMat = new THREE.MeshStandardMaterial({ color: 0xa8532f, roughness: 1.0 });
-    surface.moonMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 1.0 });
-    var groundGeo = new THREE.CircleGeometry(160, 48);
-    surface.marsGround = new THREE.Mesh(groundGeo, surface.marsMat);
-    surface.marsGround.rotation.x = -Math.PI / 2;
-    surface.marsGround.position.y = 0;
-    surface.marsGround.receiveShadow = true;
-    g.add(surface.marsGround);
-    surface.moonGround = new THREE.Mesh(groundGeo, surface.moonMat);
-    surface.moonGround.rotation.x = -Math.PI / 2;
-    surface.moonGround.position.y = 0;
-    surface.moonGround.receiveShadow = true;
-    surface.moonGround.visible = false;
-    g.add(surface.moonGround);
-
-    // static dressing rocks
-    var rockMat = new THREE.MeshStandardMaterial({ color: 0x6b5a4d, roughness: 1.0 });
-    surface.rocks = [];
-    for (var i = 0; i < 12; i++) {
-      var rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 + Math.random() * 2.0, 0), rockMat);
-      var ang = Math.random() * Math.PI * 2;
-      var rad = 16 + Math.random() * 70;
-      rock.position.set(Math.cos(ang) * rad, 0.3, Math.sin(ang) * rad);
-      rock.rotation.set(Math.random(), Math.random(), Math.random());
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      g.add(rock);
-      surface.rocks.push(rock);
-    }
-
     // Point-of-interest rock for the image-capture clip
+    var rockMat = new THREE.MeshStandardMaterial({ color: srgb(0x6b5a4d), roughness: 1.0, flatShading: true });
     surface.poi = new THREE.Mesh(new THREE.DodecahedronGeometry(1.5, 0), rockMat);
     surface.poi.position.set(15.5, 0.6, -5);
     surface.poi.rotation.set(0.4, 0.9, 0.1);
@@ -1657,7 +2468,7 @@ SMG.scene = (function () {
     createAstronaut(g);
 
     // ramp from the lander deck to the ground (rover deploy)
-    var rampMat = new THREE.MeshStandardMaterial({ color: 0x9aa2b0, roughness: 0.7, metalness: 0.3 });
+    var rampMat = new THREE.MeshStandardMaterial({ color: srgb(0x9aa2b0), roughness: 0.7, metalness: 0.3 });
     surface.ramp = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.14, 1.5), rampMat);
     surface.ramp.position.set(-3.2, 1.1, 0);
     surface.ramp.rotation.z = -0.44;
@@ -1677,9 +2488,9 @@ SMG.scene = (function () {
     surface.lander = g;
     parent.add(g);
 
-    var gold = new THREE.MeshStandardMaterial({ color: 0xcf9b4a, roughness: 0.55, metalness: 0.6 });
-    var white = new THREE.MeshStandardMaterial({ color: 0xe8ecf2, roughness: 0.5, metalness: 0.15 });
-    var dark = new THREE.MeshStandardMaterial({ color: 0x2f3540, roughness: 0.6, metalness: 0.4 });
+    var gold = new THREE.MeshStandardMaterial({ color: srgb(0xcf9b4a), roughness: 0.55, metalness: 0.6 });
+    var white = new THREE.MeshStandardMaterial({ color: srgb(0xe8ecf2), roughness: 0.5, metalness: 0.15 });
+    var dark = new THREE.MeshStandardMaterial({ color: srgb(0x2f3540), roughness: 0.6, metalness: 0.4 });
 
     var glb = instanceModel('landerLM', 3.4, true);
     if (glb) {
@@ -1735,9 +2546,9 @@ SMG.scene = (function () {
     surface.rover = g;
     parent.add(g);
 
-    var bodyMat = new THREE.MeshStandardMaterial({ color: 0xe6e9ef, roughness: 0.5, metalness: 0.25 });
-    var darkMat = new THREE.MeshStandardMaterial({ color: 0x2b3038, roughness: 0.8, metalness: 0.2 });
-    var goldMat = new THREE.MeshStandardMaterial({ color: 0xd9a441, roughness: 0.5, metalness: 0.5 });
+    var bodyMat = new THREE.MeshStandardMaterial({ color: srgb(0xe6e9ef), roughness: 0.5, metalness: 0.25 });
+    var darkMat = new THREE.MeshStandardMaterial({ color: srgb(0x4c525b), roughness: 0.75, metalness: 0.25 });
+    var goldMat = new THREE.MeshStandardMaterial({ color: srgb(0xd9a441), roughness: 0.5, metalness: 0.5 });
 
     // Rover GLBs are not in the repo yet -> intentional low-poly six-wheel build.
     surface.roverKind = 'primitive';
@@ -1779,7 +2590,7 @@ SMG.scene = (function () {
     head.add(headBox);
     var lensGeo = new THREE.SphereGeometry(0.07, 8, 6);
     var lensMat = new THREE.MeshStandardMaterial({
-      color: 0x1a1d24, emissive: 0x2f6fb5, emissiveIntensity: 0.7, roughness: 0.3
+      color: srgb(0x1a1d24), emissive: srgb(0x2f6fb5), emissiveIntensity: 0.7, roughness: 0.3
     });
     for (var l = -1; l <= 1; l += 2) {
       var lens = new THREE.Mesh(lensGeo, lensMat);
@@ -1798,10 +2609,10 @@ SMG.scene = (function () {
     surface.astronaut = g;
     parent.add(g);
 
-    var suit = new THREE.MeshStandardMaterial({ color: 0xe8ecf2, roughness: 0.55, metalness: 0.05 });
-    var trim = new THREE.MeshStandardMaterial({ color: 0xd8dde6, roughness: 0.6 });
+    var suit = new THREE.MeshStandardMaterial({ color: srgb(0xe8ecf2), roughness: 0.55, metalness: 0.05 });
+    var trim = new THREE.MeshStandardMaterial({ color: srgb(0xd8dde6), roughness: 0.6 });
     var visor = new THREE.MeshStandardMaterial({
-      color: 0xd9a03f, emissive: 0x6b4a12, emissiveIntensity: 0.35, roughness: 0.25, metalness: 0.6
+      color: srgb(0xd9a03f), emissive: srgb(0x6b4a12), emissiveIntensity: 0.35, roughness: 0.25, metalness: 0.6
     });
 
     // Friendly low-poly astronaut (Astronaut.glb is not in the repo yet).
@@ -1856,9 +2667,9 @@ SMG.scene = (function () {
       surface.relayKind = 'gltf';
     } else {
       surface.relayKind = 'primitive';
-      var bodyMat = new THREE.MeshStandardMaterial({ color: 0xdfe4ec, roughness: 0.45, metalness: 0.4 });
+      var bodyMat = new THREE.MeshStandardMaterial({ color: srgb(0xdfe4ec), roughness: 0.45, metalness: 0.4 });
       var panelMat = new THREE.MeshStandardMaterial({
-        color: 0x1f3d8f, emissive: 0x0a1a44, emissiveIntensity: 0.55,
+        color: srgb(0x1f3d8f), emissive: srgb(0x0a1a44), emissiveIntensity: 0.55,
         roughness: 0.35, metalness: 0.3
       });
       var body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.4, 1.4), bodyMat);
@@ -1878,11 +2689,10 @@ SMG.scene = (function () {
   }
 
   function setGroundDestination(dest) {
-    var d = String(dest || '').toLowerCase();
-    var isMoon = d.indexOf('moon') !== -1 || d.indexOf('luna') !== -1;
-    surface.marsGround.visible = !isMoon;
-    surface.moonGround.visible = isMoon;
-    surface.currentGround = isMoon ? 'moon' : 'mars';
+    // The locale owns the ground: Moon -> cratered regolith, Mars -> dunes,
+    // Earth -> rolling grassland.
+    applyLocale(localeForDestination(dest));
+    surface.currentGround = currentLocale;
   }
 
   // Put every surface actor back to its neutral pose (no rebuilds).
@@ -1937,6 +2747,7 @@ SMG.scene = (function () {
     if (!scene) return;
     if (surface.group) surface.group.visible = false;
     if (world.padGroup) world.padGroup.visible = true;
+    applyLocale('earth');                 // launch complexes are on Earth
     resetRocketVisual();
     hideImageCard();
     hideCountdown();
@@ -2039,7 +2850,7 @@ SMG.scene = (function () {
   // Visual poses per launch phase (world units; PAD_Y = deck top). These are
   // camera/rocket staging choices, NOT simulation values.
   var PHASE_POSES = {
-    pad: { r: { x: 0, y: PAD_Y, z: 0, rx: 0, ry: 0, rz: 0 }, c: { x: 16, y: 7, z: 30, tx: 0, ty: 6, tz: 0 } },
+    pad: { r: { x: 0, y: PAD_Y, z: 0, rx: 0, ry: 0, rz: 0 }, c: { x: 26, y: 11, z: 42, tx: 0, ty: 7, tz: 0 } },
     ascent: { r: { x: 0, y: 62, z: -6, rx: 0, ry: 0, rz: -0.06 }, c: { x: 20, y: 68, z: 26, tx: 0, ty: 64, tz: -6 } },
     stage: { r: { x: -4, y: 150, z: -18, rx: 0, ry: 0, rz: -0.14 }, c: { x: 24, y: 158, z: 22, tx: -4, ty: 154, tz: -18 } },
     coast: { r: { x: -14, y: 300, z: -46, rx: 0, ry: 0, rz: -0.48 }, c: { x: 34, y: 314, z: 26, tx: -14, ty: 304, tz: -46 } },
@@ -2398,17 +3209,32 @@ SMG.scene = (function () {
   function resolveDestination(mission) {
     var m = mission && typeof mission === 'object' ? mission : {};
     var name = str(m.destinationName) || str(m.destination) || str(m.destinationId);
-    var low = name.toLowerCase();
-    var key = 'mars';
-    if (low.indexOf('moon') !== -1 || low.indexOf('luna') !== -1) key = 'moon';
-    else if (low.indexOf('saturn') !== -1) key = 'saturn';
+    // Mission identity is a second signal: a mission's id/name says where it
+    // goes even when destinationName is missing.
+    var low = (name + ' ' + str(m.id) + ' ' + str(m.name) + ' ' + str(m.destinationId)).toLowerCase();
+    var key = 'earth';
+    if (low.indexOf('moon') !== -1 || low.indexOf('luna') !== -1 ||
+        low.indexOf('apollo') !== -1 || low.indexOf('gateway') !== -1) key = 'moon';
     else if (low.indexOf('mars') !== -1) key = 'mars';
+    else if (low.indexOf('saturn') !== -1) key = 'saturn';
     else if (low.indexOf('earth') !== -1) key = 'earth';
     return { key: key, name: name };
   }
 
   function approachTitle(dest) {
     return dest.name ? 'APPROACHING ' + dest.name.toUpperCase() : 'APPROACHING';
+  }
+
+  // During an approach the frame belongs to the destination: Earth stays as a
+  // backdrop, everything else steps out of the shot.
+  function focusPlanets(key) {
+    if (world.moon) world.moon.visible = (key === 'moon');
+    if (world.mars) world.mars.visible = (key === 'mars');
+    if (world.saturn) world.saturn.visible = (key === 'saturn');
+    if (world.saturnRing) world.saturnRing.visible = (key === 'saturn');
+    if (world.earthParts) {
+      for (var i = 0; i < world.earthParts.length; i++) world.earthParts[i].visible = true;
+    }
   }
 
   function seqApproach(b, t0, t1, ctx) {
@@ -2420,6 +3246,8 @@ SMG.scene = (function () {
       if (surface.group) surface.group.visible = false;
       if (rocket.group) rocket.group.visible = true;
       resetRocketVisual();
+      localeCut('space', run.token, { flashPeak: 0.36, warpPeak: 0.6 });
+      focusPlanets(dest.key === 'earth' ? 'earth' : dest.key);
       setPhase(run, 'APPROACH');
     } });
     b.steps.push({ t: t0 + d * 0.3, fn: function () {
@@ -2440,6 +3268,14 @@ SMG.scene = (function () {
     var cam1 = { x: P.x + dx * near, y: P.y + dy * near + P.r * 0.5, z: P.z + dz * near };
     var ship0 = { x: lerp(cam0.x, P.x, 0.14), y: lerp(cam0.y, P.y, 0.14), z: lerp(cam0.z, P.z, 0.14) };
     var ship1 = { x: lerp(cam1.x, P.x, 0.45), y: lerp(cam1.y, P.y, 0.45), z: lerp(cam1.z, P.z, 0.45) };
+    // Slide the ship off the line of sight so it frames the planet instead of
+    // silhouetting as a black dot in the middle of it.
+    var perpX = -dz, perpZ = dx;
+    var perpLen = Math.sqrt(perpX * perpX + perpZ * perpZ) || 1;
+    perpX /= perpLen; perpZ /= perpLen;
+    var side0 = P.r * 0.9, side1 = P.r * 1.15;
+    ship0.x += perpX * side0; ship0.z += perpZ * side0; ship0.y -= P.r * 0.45;
+    ship1.x += perpX * side1; ship1.z += perpZ * side1; ship1.y -= P.r * 0.35;
     var look = { x: P.x, y: P.y, z: P.z };
 
     b.keys.push(makeKey(t0,
@@ -2458,6 +3294,9 @@ SMG.scene = (function () {
     var d = Math.max(1.2, t1 - t0);
     b.steps.push({ t: t0, fn: function (run) {
       prepareSurface(dest.key);
+      // Cut from space onto the destination's own ground (cratered Moon,
+      // dune-carved Mars) with a short flash + warp streak.
+      localeCut(localeForDestination(dest.key), run.token, { flashPeak: 0.46, warpPeak: 0.78 });
       if (surface.lander) surface.lander.position.set(-6, 44, 0);
       effects.dustTargetY = 0;
       applyFlame(surface.landerFlame, 0.95, 1);
@@ -2935,9 +3774,19 @@ SMG.scene = (function () {
         if (tF !== null && t > tF + 1e-6) break;
         var pose = poseForPhase(samples[i3].phase);
         b.keys.push(makeKey(t, pose.r, pose.c));
-        step(t, (function (label) {
-          return function (run) { setPhase(run, label); };
-        })(phaseLabelOf(samples[i3].phase)));
+        step(t, (function (phaseKey, label) {
+          return function (run) {
+            setPhase(run, label);
+            // The world follows the flight: Earth ground -> black space. The
+            // first cut gets a short flash + warp so it reads as a transition.
+            var want = localeForPhase(phaseKey);
+            if (want !== currentLocale) {
+              localeCut(want, run.token, want === 'space'
+                ? { flashPeak: 0.34, warpPeak: 0.55 }
+                : { flashPeak: 0.3 });
+            }
+          };
+        })(samples[i3].phase, phaseLabelOf(samples[i3].phase)));
       }
       if (tF !== null && kind) appendFailure(b, kind, failureType, failure, tF);
     }
@@ -3211,10 +4060,10 @@ SMG.scene = (function () {
     var amp = reducedMotion ? 0.35 : 1;
     var speed = reducedMotion ? 0.5 : 1;
     var a = elapsedWall * 0.045 * speed + 0.6;
-    var tx = Math.sin(a) * 30 + 4;
-    var ty = 12 + Math.sin(elapsedWall * 0.11 * speed) * 1.4 * amp;
-    var tz = Math.cos(a) * 30 + 6;
-    var cx = 0, cy = 7, cz = 0;
+    var tx = Math.sin(a) * 44 + 4;
+    var ty = 15 + Math.sin(elapsedWall * 0.11 * speed) * 1.6 * amp;
+    var tz = Math.cos(a) * 44 + 6;
+    var cx = 0, cy = 7.5, cz = 0;
     if (cameraBlend) {
       cameraBlend.t += dt;
       var u = easeInOut(clamp01(cameraBlend.t / cameraBlend.dur));
@@ -3234,6 +4083,12 @@ SMG.scene = (function () {
       camera.lookAt(cx, cy, cz);
     }
     camTX = cx; camTY = cy; camTZ = cz;
+    // Gentle twinkle: keeps the starfield alive without extra draw calls.
+    if (world.stars && world.stars.visible) {
+      var tw = 0.5 + 0.5 * Math.sin(elapsedWall * 0.9);
+      world.stars.material.opacity = 0.8 + tw * 0.16;
+      if (world.stars2) world.stars2.material.opacity = 0.4 + tw * 0.24;
+    }
     // subtle flame-off engine glow (light only, no flame cone)
     if (rocket.engineLight) {
       rocket.engineLight.intensity = 0.32 +
@@ -3254,6 +4109,7 @@ SMG.scene = (function () {
     applyBuild(build);                 // read-only: never mutates `build`
     if (surface.group) surface.group.visible = false;
     if (world.padGroup) world.padGroup.visible = true;
+    applyLocale('earth');              // the pad is an Earth launch site
     stopEffects();
     idleActive = true;
     if (!wasIdle && camera && !reducedMotion) {
@@ -3345,7 +4201,23 @@ SMG.scene = (function () {
     updateRun(dt);
     updateIdle(dt);
     updateEffects(sdt);
+    syncCameraHud();
     if (renderer && scene && camera) renderer.render(scene, camera);
+  }
+
+  // Keep the camera-space HUD (flash quad, warp streaks) locked to the view
+  // even though it lives in the scene graph.
+  function syncCameraHud() {
+    if (!camera) return;
+    if (effects.flash && effects.flash.visible) {
+      effects.flash.position.copy(camera.position);
+      effects.flash.quaternion.copy(camera.quaternion);
+      effects.flash.translateZ(-1);
+    }
+    if (effects.warp && effects.warp.visible) {
+      effects.warp.position.copy(camera.position);
+      effects.warp.quaternion.copy(camera.quaternion);
+    }
   }
 
   function startLoop() {
@@ -3630,10 +4502,10 @@ SMG.scene = (function () {
     'approach-moon': { outcome: mockLaunch(['approach']), mission: mockMission('Moon', 'Lunar Approach Preview') },
     'approach-mars': { outcome: mockLaunch(['approach']), mission: mockMission('Mars', 'Mars Approach Preview') },
     'approach-saturn': { outcome: mockLaunch(['approach']), mission: mockMission('Saturn', 'Saturn Approach Preview') },
-    'landing': { outcome: mockLaunch(['landing']), mission: mockMission('Mars', 'Landing Preview') },
-    'crew-exit': { outcome: mockLaunch(['landing', 'crew_deploy']), mission: mockMission('Mars', 'Crew Exit Preview') },
-    'rover-deploy': { outcome: mockLaunch(['landing', 'rover_deploy']), mission: mockMission('Mars', 'Rover Deploy Preview') },
-    'rover-drive': { outcome: mockLaunch(['surface_drive']), mission: mockMission('Mars', 'Rover Drive Preview') },
+    'landing': { outcome: mockLaunch(['landing']), mission: mockMission('Moon', 'Landing Preview') },
+    'crew-exit': { outcome: mockLaunch(['landing', 'crew_deploy']), mission: mockMission('Moon', 'Crew Exit Preview') },
+    'rover-deploy': { outcome: mockLaunch(['landing', 'rover_deploy']), mission: mockMission('Moon', 'Rover Deploy Preview') },
+    'rover-drive': { outcome: mockLaunch(['surface_drive']), mission: mockMission('Moon', 'Rover Drive Preview') },
     'image-capture': { outcome: mockLaunch(['image_capture']), mission: mockMission('Mars', 'Image Capture Preview') },
     'data-uplink': { outcome: mockLaunch(['data_uplink']), mission: mockMission('Mars', 'Data Uplink Preview') },
     'skip-replay': {
@@ -3659,6 +4531,9 @@ SMG.scene = (function () {
   // is idempotent, so ui.js's later real init() cannot double-create a
   // renderer, canvas, listeners or loops.
   if (/[?&]visualPreview=1(&|$)/.test(String(window.location && window.location.search || ''))) {
+    // Dev-only: the lab is for inspecting the 3D scene, so the game screens
+    // (campaign cards) step out of the way. CSS handles the actual hiding.
+    try { document.documentElement.classList.add('smg-preview-mode'); } catch (e) { /* older browsers */ }
     var bootPreview = function () {
       var host = document.getElementById('scene');
       if (host) init(host);
