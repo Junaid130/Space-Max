@@ -1,0 +1,1431 @@
+/* ==========================================================================
+   Space Mission Game — style.css
+   Owned by Person 4 (visuals). Styles the ui.js screen shell, the scene.js
+   overlay contract (.smg-*), and the dev-only Preview Lab.
+
+   Design rules:
+   - All colour / radius / spacing / type lives in the tokens below. Use them.
+   - Scene-specific rules are scoped under #scene or a .smg-* class so they
+     never fight Person 3's screens.
+   - Hover is an enhancement only; focus-visible is always drawn; status is
+     never conveyed by colour alone (text + shape accompany it).
+   - No remote fonts, no !important (the reduced-motion reset excepted).
+   ========================================================================== */
+
+
+/* === Tokens === */
+
+:root {
+  color-scheme: dark;
+
+  /* --- colour --- */
+  --smg-bg: #0a0f2e;            /* deep midnight navy page background */
+  --smg-bg-deep: #060a1f;       /* darkest wells: image slots, scrims   */
+  --smg-panel: rgba(17, 24, 56, 0.92);   /* floating panels over canvas */
+  --smg-panel-solid: #141c42;    /* opaque dev panel surface            */
+  --smg-line: rgba(146, 166, 224, 0.35); /* hairline borders            */
+  --smg-text: #f2f5ff;          /* primary text                         */
+  --smg-text-dim: #b9c3e6;      /* secondary text (AA on panel)         */
+  --smg-accent: #4cc9f0;        /* bright cyan — primary accent         */
+  --smg-accent-2: #ffd166;      /* amber — dev / highlight accent       */
+  --smg-good: #4fe3a1;          /* mint — success, uplink alive         */
+  --smg-warn: #ffa94d;          /* amber — recovered-event warnings     */
+  --smg-fail: #ff7b86;          /* coral — friendly failure red         */
+  --smg-focus: #9be7ff;         /* keyboard focus ring (neutral)        */
+  --smg-btn-bg: #1d2757;        /* button / chip surface                */
+  --smg-scrim: rgba(6, 10, 31, 0.7); /* screen scrim over the canvas    */
+
+  /* --- radius --- */
+  --smg-radius: 18px;           /* cards and panels        */
+  --smg-radius-sm: 10px;        /* buttons, chips, inputs  */
+  --smg-radius-pill: 999px;     /* pills and progress bars */
+
+  /* --- spacing (4px-based rhythm) --- */
+  --smg-space-1: 0.25rem;       /*  4px — icon gaps            */
+  --smg-space-2: 0.5rem;        /*  8px — tight inner gap      */
+  --smg-space-3: 1rem;          /* 16px — component padding    */
+  --smg-space-4: 1.5rem;        /* 24px — block padding        */
+
+  /* --- typography (system stack only — no remote fonts) --- */
+  --smg-font: system-ui, -apple-system, "Segoe UI", Roboto,
+              "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --smg-text-sm: 0.875rem;
+  --smg-text-base: 1rem;
+  --smg-text-lg: 1.125rem;
+  --smg-text-display: clamp(1.75rem, 4vw, 2.75rem);
+
+  /* --- elevation & motion --- */
+  --smg-shadow: 0 10px 30px rgba(3, 6, 18, 0.55);
+  --smg-dur: 0.3s;
+  --smg-dur-fast: 0.15s;
+  --smg-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+
+/* === Base / page shell === */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 120% 90% at 50% -10%, #16205a 0%, transparent 60%),
+    var(--smg-bg);
+  color: var(--smg-text);
+  font-family: var(--smg-font);
+  font-size: var(--smg-text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  margin: 0 0 var(--smg-space-3);
+  font-size: var(--smg-text-display);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  text-shadow: 0 2px 0 rgba(6, 10, 31, 0.6);
+}
+
+p {
+  margin: 0 0 var(--smg-space-3);
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+/* 3D canvas layer: fixed behind everything, never scrolls, never covers UI.
+   #scene comes first in the DOM; this plus #app's z-index keeps it below. */
+#scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+#scene canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+
+/* === Screens (#app) === */
+
+/* App layer sits above the canvas (z-index 0 → 1) and stays transparent so
+   the space scene reads through the gaps between screens. */
+#app {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+/* Base screen: full-viewport centred column with a soft scrim so text stays
+   legible over the canvas. Person 3 screens inherit this — extend via new
+   selectors on their real class names, do not fork the layout. */
+.screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--smg-space-3);
+  min-height: 100vh;
+  padding: var(--smg-space-4);
+  text-align: center;
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 50%, rgba(22, 32, 90, 0.55), transparent 75%),
+    linear-gradient(180deg, rgba(6, 10, 31, 0.55), rgba(6, 10, 31, 0.85));
+}
+
+/* The loading placeholder has no controls, so it lets clicks fall through to
+   the canvas/preview lab underneath (dev previewing before ui.js lands). */
+.screen--loading {
+  pointer-events: none;
+  animation: smg-breathe 2.6s ease-in-out infinite;
+}
+
+.screen--loading p {
+  color: var(--smg-text-dim);
+  margin-bottom: var(--smg-space-2);
+}
+
+.hint {
+  max-width: 34rem;
+  font-size: var(--smg-text-sm);
+  color: var(--smg-text-dim);
+}
+
+@keyframes smg-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.72; }
+}
+
+/* --- Generic primitives (additions — available to Person 3 markup) --- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--smg-space-2);
+  min-height: 44px;
+  min-width: 44px;
+  padding: var(--smg-space-2) var(--smg-space-4);
+  font: inherit;
+  font-weight: 700;
+  color: var(--smg-text);
+  background: var(--smg-btn-bg);
+  border: 2px solid var(--smg-line);
+  border-radius: var(--smg-radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--smg-dur-fast) var(--smg-ease),
+    border-color var(--smg-dur-fast) var(--smg-ease),
+    transform var(--smg-dur-fast) var(--smg-ease);
+}
+
+.btn:hover {
+  background: #263172;
+  border-color: var(--smg-accent);
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.panel {
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-line);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  padding: var(--smg-space-4);
+  text-align: left;
+}
+
+/* Builder gauge: coloured fill always paired with a text value in markup. */
+.gauge {
+  height: 0.75rem;
+  background: rgba(6, 10, 31, 0.7);
+  border: 1px solid var(--smg-line);
+  border-radius: var(--smg-radius-pill);
+  overflow: hidden;
+}
+
+.gauge__fill {
+  display: block;
+  height: 100%;
+  width: 0; /* width comes from JS */
+  border-radius: inherit;
+  background: var(--smg-good);
+}
+
+.gauge--ok   .gauge__fill { background: var(--smg-good); }
+.gauge--warn .gauge__fill { background: var(--smg-warn); }
+.gauge--crit .gauge__fill { background: var(--smg-fail); }
+
+/* === Screens v2 (campaign / briefing / build / results) ===
+   Styles the exact selectors js/ui.js emits:
+     campaign -> briefing -> build -> launch overlay -> results.
+   Built entirely from the tokens above; system fonts only. Status is
+   always carried by text + shape as well as colour (locked cards say
+   "LOCKED", selected choices draw a checkmark, disabled LAUNCH goes
+   dashed + locked). No !important here — the reduced-motion reset in
+   Utilities is the only documented exception and stays untouched. */
+
+/* --- Screen shells ------------------------------------------------------ */
+
+/* Campaign needs more air around its card grid than the default gap. */
+.screen--campaign {
+  gap: var(--smg-space-4);
+}
+
+/* Tighter vertical padding so the builder fits 1280x720 without clipping
+   (the column still grows and the page scrolls if content exceeds it). */
+.screen--build {
+  padding-block: var(--smg-space-3);
+}
+
+/* Readable measure for the copy-heavy panels. */
+.screen--briefing .briefing,
+.screen--results .results {
+  width: min(100%, 42rem);
+}
+
+.screen--build .build {
+  width: min(100%, 48rem);
+}
+
+
+/* --- Screen 1: campaign ------------------------------------------------- */
+
+/* Responsive card grid: auto-fit down to one column on phones without
+   ever overflowing the viewport (min() guards the minimum track). */
+.mission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: var(--smg-space-3);
+  width: min(100%, 68rem);
+  text-align: left;
+}
+
+/* Big, friendly, kid-sized hit target. Cards are <button>s, so font and
+   text-align are re-declared here rather than inherited from UA defaults. */
+.mission-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--smg-space-2);
+  min-height: 11rem;
+  padding: var(--smg-space-3);
+  font: inherit;
+  text-align: left;
+  color: var(--smg-text);
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-line);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  cursor: pointer;
+  transition:
+    background var(--smg-dur-fast) var(--smg-ease),
+    border-color var(--smg-dur-fast) var(--smg-ease),
+    transform var(--smg-dur-fast) var(--smg-ease);
+}
+
+/* Hover is enhancement only — the card is fully readable without it. */
+.mission-card:hover:not(:disabled) {
+  border-color: var(--smg-accent);
+  transform: translateY(-3px);
+}
+
+.mission-card:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.mission-card__order {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 var(--smg-space-2);
+  font-size: var(--smg-text-sm);
+  font-weight: 800;
+  color: var(--smg-bg-deep);
+  background: var(--smg-accent);
+  border-radius: var(--smg-radius-pill);
+}
+
+.mission-card__name {
+  font-size: var(--smg-text-lg);
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.mission-card__objective {
+  font-size: var(--smg-text-sm);
+  line-height: 1.5;
+  color: var(--smg-text-dim);
+}
+
+/* The explicit state line ui.js appends ("LOCKED — finish Mission N
+   first" / "COMPLETED"). Uppercase badge styling + it is real text, so
+   state never depends on colour alone. Pinned to the card bottom. */
+.mission-card small {
+  margin-top: auto;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Locked: reduced emphasis via dashed shape + dim tokens (never opacity
+   alone, so the LOCKED text stays perfectly legible). Also disabled in
+   markup, so it is unfocusable and unclickable. */
+.mission-card--locked {
+  background: rgba(17, 24, 56, 0.5);
+  border-style: dashed;
+  color: var(--smg-text-dim);
+  cursor: not-allowed;
+}
+
+.mission-card--locked .mission-card__order {
+  background: var(--smg-btn-bg);
+  color: var(--smg-text-dim);
+}
+
+.mission-card--locked .mission-card__name {
+  color: var(--smg-text-dim);
+}
+
+.mission-card--locked small {
+  color: var(--smg-warn);
+}
+
+/* Completed: mint border + mint badge + the "COMPLETED" text above. */
+.mission-card--done {
+  border-color: rgba(79, 227, 161, 0.55);
+}
+
+.mission-card--done .mission-card__order {
+  background: var(--smg-good);
+  color: var(--smg-bg-deep);
+}
+
+.mission-card--done small {
+  color: var(--smg-good);
+}
+
+
+/* --- Screen 2: briefing ------------------------------------------------- */
+
+.briefing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-3);
+}
+
+.briefing h1 {
+  margin: 0;
+}
+
+.briefing__objective {
+  margin: 0;
+  font-size: var(--smg-text-lg);
+  line-height: 1.5;
+  color: var(--smg-text);
+}
+
+/* Tidy fact sheet: inset well with accent markers, wrapping to two
+   columns when there is room for them. */
+.briefing__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--smg-space-2) var(--smg-space-3);
+  margin: 0;
+  padding: var(--smg-space-3);
+  list-style: none;
+  background: rgba(6, 10, 31, 0.5);
+  border: 1px solid var(--smg-line);
+  border-radius: var(--smg-radius-sm);
+}
+
+.briefing__facts li {
+  display: flex;
+  gap: var(--smg-space-2);
+  font-size: var(--smg-text-sm);
+  color: var(--smg-text-dim);
+}
+
+.briefing__facts li::before {
+  content: "▸";
+  flex: none;
+  font-weight: 700;
+  color: var(--smg-accent);
+}
+
+
+/* --- Screen 3: build ---------------------------------------------------- */
+
+.build {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-3);
+  text-align: left;
+}
+
+.build > h1 {
+  margin: 0;
+  text-align: center;
+  /* Slightly smaller than the display token so two control groups plus
+     the vehicle check fit 1280x720 comfortably. */
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+/* --- The two notched control groups: the hero of the build screen --- */
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-2);
+}
+
+.control-group__label {
+  font-size: var(--smg-text-sm);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--smg-accent);
+}
+
+/* Segmented row: one notch per option, wrapping as a unit. (The bare div
+   is ui.js's role="group" wrapper — aria lives on it, styling lives here.) */
+.control-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--smg-space-2);
+}
+
+/* Choice buttons: 48px+ targets, label over an optional hint, equal width
+   per wrapped line (flex-grow shares the line out). */
+.choice {
+  flex: 1 1 10rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--smg-space-1);
+  min-height: 3rem;
+  padding: var(--smg-space-2) var(--smg-space-3);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--smg-text);
+  background: var(--smg-btn-bg);
+  border: 2px solid var(--smg-line);
+  border-radius: var(--smg-radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--smg-dur-fast) var(--smg-ease),
+    border-color var(--smg-dur-fast) var(--smg-ease),
+    box-shadow var(--smg-dur-fast) var(--smg-ease);
+}
+
+/* Notch indicator: a hollow circle when off. It is always laid out (the
+   box comes from CSS, not content), so selecting never shifts the row. */
+.choice::before {
+  content: "";
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2px solid var(--smg-line);
+  border-radius: 50%;
+  background: rgba(6, 10, 31, 0.55);
+}
+
+.choice:not(.is-selected):hover {
+  border-color: var(--smg-accent);
+  background: #263172;
+}
+
+/* Selected state: accent border + filled tint + ring + the notch fills in
+   with a checkmark below — colour is always paired with shape and the
+   check glyph, and aria-pressed mirrors it for assistive tech. */
+.choice.is-selected {
+  border-color: var(--smg-accent);
+  background:
+    linear-gradient(180deg, rgba(76, 201, 240, 0.22), rgba(76, 201, 240, 0.08)),
+    var(--smg-btn-bg);
+  box-shadow: 0 0 0 3px rgba(76, 201, 240, 0.35);
+}
+
+.choice.is-selected::before {
+  content: "\2713";
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--smg-bg-deep);
+  background: var(--smg-accent);
+  border-color: var(--smg-accent);
+}
+
+.choice__hint {
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--smg-text-dim);
+}
+
+.choice.is-selected .choice__hint {
+  color: var(--smg-text);
+}
+
+/* --- Vehicle check: descriptive readouts (number always in the text) --- */
+
+.vehicle-check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-3);
+}
+
+.vehicle-check h2 {
+  margin: 0;
+  font-size: var(--smg-text-lg);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--smg-accent);
+}
+
+/* label | slim bar | value, with the sim's note on its own line below. */
+.vehicle-check__row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) minmax(4rem, 1fr) auto;
+  align-items: center;
+  gap: var(--smg-space-2) var(--smg-space-3);
+}
+
+.vehicle-check__row span:first-of-type {
+  font-size: var(--smg-text-sm);
+  font-weight: 600;
+  color: var(--smg-text);
+}
+
+/* Slimmer bar than the generic primitive inside the builder. Bucket
+   colours (.gauge--ok / --warn / --crit) are already tokenised above. */
+.vehicle-check .gauge {
+  height: 0.55rem;
+}
+
+.vehicle-check__row span:last-of-type {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Value tint reinforces the bucket — the number itself stays real text,
+   so this is never colour-only status. */
+.vehicle-check__row .gauge--ok   + span { color: var(--smg-good); }
+.vehicle-check__row .gauge--warn + span { color: var(--smg-warn); }
+.vehicle-check__row .gauge--crit + span { color: var(--smg-fail); }
+
+.vehicle-check__row small {
+  grid-column: 1 / -1;
+  font-size: var(--smg-text-sm);
+  line-height: 1.4;
+  color: var(--smg-text-dim);
+}
+
+/* Validation issues (#build-issues, aria-describedby by LAUNCH): a calm
+   amber note box — kid-readable guidance, never a red scolding. Empty on
+   a valid build, so the :not(:empty) guard draws nothing at all. */
+#build-issues:not(:empty) {
+  max-width: 34rem;
+  padding: var(--smg-space-2) var(--smg-space-3);
+  background: rgba(255, 169, 77, 0.12);
+  border-left: 4px solid var(--smg-warn);
+  border-radius: var(--smg-radius-sm);
+  color: var(--smg-text);
+}
+
+#build-issues:not(:empty) p {
+  margin: 0;
+  font-size: var(--smg-text-sm);
+}
+
+
+/* --- Shared action row + button variants (briefing / build / results) --- */
+
+/* Centred, wrapping row of big targets; stacks to full width on phones. */
+.launch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--smg-space-2);
+  width: 100%;
+}
+
+/* Quiet secondary action. */
+.btn--ghost {
+  background: transparent;
+  border-color: var(--smg-line);
+  color: var(--smg-text-dim);
+}
+
+.btn--ghost:hover {
+  background: var(--smg-btn-bg);
+  border-color: var(--smg-accent);
+  color: var(--smg-text);
+}
+
+/* Primary CTA: dark navy on bright cyan (AA+), heavier weight, soft glow
+   so START MISSION / LAUNCH / NEXT MISSION reads as "the way forward". */
+.btn--primary {
+  background: var(--smg-accent);
+  border-color: var(--smg-accent);
+  color: var(--smg-bg-deep);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  box-shadow: 0 6px 16px rgba(76, 201, 240, 0.3);
+}
+
+/* Declared after .btn:hover so the accent surface survives the hover. */
+.btn--primary:hover {
+  background: var(--smg-accent);
+  filter: brightness(1.07);
+}
+
+/* Disabled LAUNCH (until every control has a pick): shape + surface +
+   text, never opacity alone — dashed border, inert surface, dim ink, no
+   glow, not-allowed cursor, plus the padlock glyph. The reason itself is
+   plain text in #build-issues via aria-describedby. Declared last so it
+   beats the hover rules above. */
+.btn:disabled {
+  background: var(--smg-bg-deep);
+  border-style: dashed;
+  border-color: var(--smg-line);
+  color: var(--smg-text-dim);
+  box-shadow: none;
+  transform: none;
+}
+
+.btn--primary:disabled {
+  background: var(--smg-btn-bg);
+  color: var(--smg-text-dim);
+}
+
+.btn--primary:disabled::after {
+  content: " \1F512";
+}
+
+.btn--primary:disabled:hover {
+  background: var(--smg-btn-bg);
+  filter: none;
+}
+
+/* --- Screen 4: launch overlay ------------------------------------------ */
+
+/* Covers the viewport while scene.js plays the launch. pointer-events
+   pass straight through — the overlay can never trap a click; only the
+   SKIP button opts back in below. The scrim is a soft top fade purely so
+   the SKIP pill stays legible over bright exhaust frames. */
+.launch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: var(--smg-space-3);
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 10, 31, 0.6),
+    rgba(6, 10, 31, 0.18) 24%,
+    transparent 48%
+  );
+}
+
+.launch-overlay__skip {
+  pointer-events: auto;
+  min-height: 44px;
+  padding: var(--smg-space-2) var(--smg-space-4);
+  font-size: var(--smg-text-sm);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--smg-text);
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-accent);
+  border-radius: var(--smg-radius-pill);
+}
+
+.launch-overlay__skip:hover {
+  background: var(--smg-btn-bg);
+  border-color: var(--smg-accent);
+}
+
+.launch-overlay__skip:active {
+  transform: translateY(1px);
+}
+
+
+/* --- Screen 5: results -------------------------------------------------- */
+
+/* One calm entrance (single iteration — no flashing), neutralised by the
+   global reduced-motion reset in Utilities. */
+@keyframes smg-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-3);
+  text-align: center;
+  animation: smg-rise 0.45s var(--smg-ease) both;
+}
+
+/* Win: celebratory but calm — a mint wash and a star badge, no confetti
+   storm, no looping motion. */
+.results--win {
+  border-top: 5px solid var(--smg-good);
+  background:
+    linear-gradient(160deg, rgba(79, 227, 161, 0.14), transparent 55%),
+    var(--smg-panel);
+}
+
+/* Fail: gentle and encouraging — amber (retry) over a whisper of coral,
+   never a harsh red punishment screen. */
+.results--fail {
+  border-top: 5px solid var(--smg-accent-2);
+  background:
+    linear-gradient(
+      160deg,
+      rgba(255, 169, 77, 0.12),
+      rgba(255, 123, 134, 0.08) 55%,
+      transparent 80%
+    ),
+    var(--smg-panel);
+}
+
+.results__title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--smg-space-2);
+  margin: 0;
+  text-align: center;
+}
+
+/* Badge glyph above the title: shape + glyph carry the verdict alongside
+   the words ui.js renders ("Mission Complete!" / "So close — try again!"). */
+.results__title::before {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.results--win .results__title::before {
+  content: "\2605"; /* star */
+  color: var(--smg-bg-deep);
+  background: var(--smg-good);
+  box-shadow: 0 0 18px rgba(79, 227, 161, 0.45);
+}
+
+.results--fail .results__title::before {
+  content: "\21BB"; /* clockwise arrow — "go again", not "you failed" */
+  color: var(--smg-bg-deep);
+  background: var(--smg-accent-2);
+}
+
+.results__message {
+  margin: 0;
+  color: var(--smg-text-dim);
+}
+
+.results--win .results__message {
+  color: var(--smg-text);
+}
+
+/* --- Knowledge panel: the learning payoff, on win AND fail -------------- */
+
+/* Deliberately distinct from every other surface: warm amber "takeaway"
+   card with its own well, so it reads as the thing to remember. */
+.knowledge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-2);
+  padding: var(--smg-space-3) var(--smg-space-4);
+  text-align: left;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 209, 102, 0.16),
+      rgba(255, 209, 102, 0.05) 55%,
+      transparent 85%
+    ),
+    var(--smg-bg-deep);
+  border: 2px solid rgba(255, 209, 102, 0.65);
+  border-radius: var(--smg-radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.knowledge__title {
+  display: flex;
+  align-items: center;
+  gap: var(--smg-space-2);
+  margin: 0;
+  font-size: var(--smg-text-lg);
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--smg-accent-2);
+}
+
+/* Font-independent marker (no emoji, no glyph availability risk). */
+.knowledge__title::before {
+  content: "";
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  background: var(--smg-accent-2);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.knowledge__text {
+  margin: 0;
+  font-size: var(--smg-text-base);
+  line-height: 1.6;
+  color: var(--smg-text);
+}
+
+
+/* --- Screens v2 responsive --------------------------------------------- */
+
+@media (max-width: 900px) {
+  /* Buttons grow to share each line so tablet taps stay generous. */
+  .launch-bar .btn {
+    flex: 1 1 12rem;
+  }
+}
+
+@media (max-width: 560px) {
+  /* One notch per row, full width: equal-width, unmissable, thumb-sized. */
+  .choice {
+    flex-basis: 100%;
+  }
+
+  /* Stacked full-width actions. */
+  .launch-bar .btn {
+    flex: 1 1 100%;
+  }
+
+  /* Facts stack too — no two-column squeeze on small phones. */
+  .briefing__facts {
+    grid-template-columns: 1fr;
+  }
+
+  /* Readouts stack: label, bar, value, note — no shrunken text. */
+  .vehicle-check__row {
+    grid-template-columns: 1fr;
+  }
+
+  .vehicle-check__row small {
+    grid-column: auto;
+  }
+}
+
+
+/* === Scene overlay === */
+
+/* Injected inside #scene: sits above the canvas (z-index 1) but stays below
+   #app (which is z-index 1 in a sibling stacking context). It never blocks
+   clicks — interactive children must opt back in with pointer-events:auto. */
+#scene .smg-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* --- Shared show/hide contract -------------------------------------------
+   These five overlays start hidden and are revealed by .is-visible (scene.js
+   toggles the class). opacity/transform fade in immediately; visibility is
+   delayed on hide so the fade-out is actually seen. */
+.smg-countdown,
+.smg-card,
+.smg-alert,
+.smg-image-card,
+.smg-uplink {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--smg-dur) var(--smg-ease),
+    transform var(--smg-dur) var(--smg-ease),
+    visibility 0s linear var(--smg-dur);
+}
+
+.smg-countdown.is-visible,
+.smg-card.is-visible,
+.smg-alert.is-visible,
+.smg-image-card.is-visible,
+.smg-uplink.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0s;
+}
+
+/* --- Countdown: huge 3–2–1 numeral, centred over the launch --- */
+.smg-countdown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: clamp(6rem, 24vw, 15rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  text-shadow:
+    0 0 28px rgba(76, 201, 240, 0.65),
+    0 6px 0 rgba(6, 10, 31, 0.55);
+  transform: scale(0.7);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --- Transition card: APPROACHING MARS style --- */
+.smg-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;          /* centring; transform stays free to animate */
+  max-width: min(90vw, 36rem);
+  padding: var(--smg-space-4) calc(var(--smg-space-4) + 0.5rem);
+  text-align: center;
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-line);
+  border-top: 5px solid var(--smg-accent);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  transform: translateY(14px) scale(0.96);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.smg-card__kicker {
+  display: block;
+  font-size: var(--smg-text-sm);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--smg-accent);
+}
+
+.smg-card__title {
+  display: block;
+  margin-top: var(--smg-space-2);
+  font-size: clamp(1.5rem, 5vw, 2.75rem);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0.03em;
+  color: var(--smg-text);
+}
+
+/* --- Alert pill: failure / recovered-event warnings ---
+   Colour is always paired with the badge glyph and the title text. */
+.smg-alert {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: min(90vw, 32rem);
+  padding: var(--smg-space-3) var(--smg-space-4);
+  text-align: left;
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-line);
+  border-left: 6px solid var(--smg-accent);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  transform: translateY(-14px) scale(0.97);
+}
+
+.smg-alert__title {
+  display: flex;
+  align-items: center;
+  gap: var(--smg-space-2);
+  margin: 0;
+  font-size: var(--smg-text-lg);
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--smg-text);
+}
+
+.smg-alert__title::before {
+  content: "i";
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  font-size: 0.95rem;
+  font-weight: 800;
+  font-style: italic;
+  background: var(--smg-accent);
+  color: var(--smg-bg-deep);
+}
+
+.smg-alert__detail {
+  display: block;
+  margin-top: var(--smg-space-1);
+  font-size: var(--smg-text-sm);
+  color: var(--smg-text-dim);
+}
+
+/* Warm, friendly red — never harsh. */
+.smg-alert--failure {
+  border-color: rgba(255, 123, 134, 0.55);
+  border-left-color: var(--smg-fail);
+  background:
+    linear-gradient(135deg, rgba(255, 123, 134, 0.16), transparent 60%),
+    var(--smg-panel);
+}
+
+.smg-alert--failure .smg-alert__title::before {
+  content: "✕";
+  font-style: normal;
+  background: var(--smg-fail);
+}
+
+/* Amber recovered-event warning. */
+.smg-alert--warning {
+  border-color: rgba(255, 169, 77, 0.55);
+  border-left-color: var(--smg-warn);
+  background:
+    linear-gradient(135deg, rgba(255, 169, 77, 0.16), transparent 60%),
+    var(--smg-panel);
+}
+
+.smg-alert--warning .smg-alert__title::before {
+  content: "!";
+  font-style: normal;
+  background: var(--smg-warn);
+}
+
+/* --- Returned-image card (rover science moment) --- */
+.smg-image-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: min(88vw, 26rem);
+  padding: var(--smg-space-3);
+  text-align: center;
+  background: var(--smg-panel);
+  border: 3px solid var(--smg-line);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  transform: scale(0.94);
+}
+
+.smg-image-card__img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  background: var(--smg-bg-deep);
+  border: 1px solid var(--smg-line);
+  border-radius: var(--smg-radius-sm);
+}
+
+.smg-image-card__caption {
+  display: block;
+  margin-top: var(--smg-space-2);
+  padding-top: var(--smg-space-2);
+  border-top: 1px dashed var(--smg-line);
+  font-size: var(--smg-text-sm);
+  color: var(--smg-text-dim);
+}
+
+/* --- MISSION CONTROL uplink indicator (top-right pill) --- */
+.smg-uplink {
+  position: absolute;
+  top: var(--smg-space-3);
+  right: var(--smg-space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--smg-space-2);
+  padding: var(--smg-space-2) var(--smg-space-3);
+  background: var(--smg-panel);
+  border: 2px solid var(--smg-line);
+  border-radius: var(--smg-radius-pill);
+  box-shadow: var(--smg-shadow);
+  transform: translateY(-10px);
+}
+
+.smg-uplink__dot {
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--smg-good);
+  animation: smg-uplink-pulse 2.2s ease-in-out infinite;
+}
+
+.smg-uplink__label {
+  font-size: var(--smg-text-sm);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--smg-text);
+}
+
+/* Gentle 2.2s ring pulse — no rapid flashing. */
+@keyframes smg-uplink-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 227, 161, 0.55); }
+  60%      { box-shadow: 0 0 0 7px rgba(79, 227, 161, 0); }
+}
+
+/* --- WebGL failure fallback: friendly, visible without .is-visible --- */
+#scene .smg-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: min(90vw, 30rem);
+  padding: var(--smg-space-4);
+  text-align: center;
+  background:
+    linear-gradient(135deg, rgba(255, 209, 102, 0.14), transparent 60%),
+    var(--smg-panel);
+  border: 2px solid rgba(255, 209, 102, 0.55);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+}
+
+#scene .smg-error h2 {
+  margin: 0 0 var(--smg-space-2);
+  font-size: var(--smg-text-lg);
+  font-weight: 800;
+}
+
+#scene .smg-error p {
+  margin: 0;
+  color: var(--smg-text-dim);
+  font-size: var(--smg-text-sm);
+}
+
+
+/* === Preview lab (dev only) === */
+
+/* Dev panel: bottom-right, solid surface + dashed amber border so it reads
+   as tooling, not gameplay. Toggled with the `hidden` attribute. */
+#scene .smg-preview {
+  position: fixed;
+  right: var(--smg-space-3);
+  bottom: var(--smg-space-3);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-2);
+  width: min(26rem, calc(100vw - var(--smg-space-4)));
+  max-height: min(70vh, 42rem);
+  overflow-y: auto;
+  padding: var(--smg-space-3);
+  font-size: var(--smg-text-sm);
+  background: rgba(10, 14, 34, 0.97);
+  border: 2px dashed var(--smg-accent-2);
+  border-radius: var(--smg-radius);
+  box-shadow: var(--smg-shadow);
+  pointer-events: auto;
+}
+
+#scene .smg-preview[hidden] {
+  display: none;
+}
+
+.smg-preview__banner {
+  padding: var(--smg-space-2) var(--smg-space-3);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--smg-bg-deep);
+  background: var(--smg-accent-2);
+  border-radius: var(--smg-radius-sm);
+}
+
+.smg-preview__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--smg-space-1);
+}
+
+/* Base chip/button shared by clip tabs and replay/stop/reset actions. */
+.smg-preview__btn {
+  font: inherit;
+  font-weight: 600;
+  color: var(--smg-text);
+  background: var(--smg-btn-bg);
+  border: 1px solid var(--smg-line);
+  border-radius: var(--smg-radius-sm);
+  min-height: 40px;
+  padding: var(--smg-space-1) var(--smg-space-2);
+  cursor: pointer;
+  transition:
+    background var(--smg-dur-fast) var(--smg-ease),
+    border-color var(--smg-dur-fast) var(--smg-ease);
+}
+
+.smg-preview__btn:hover {
+  background: #263172;
+  border-color: var(--smg-accent);
+}
+
+.smg-preview__btn:active {
+  background: #16204f;
+}
+
+.smg-preview__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 25 clip chips (data-clip): compact but still a 40px hit target. */
+.smg-preview__tabs .smg-preview__btn,
+.smg-preview__btn[data-clip] {
+  flex: 1 1 6.5rem;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.smg-preview__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--smg-space-1);
+}
+
+.smg-preview__phase {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--smg-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smg-preview__track {
+  height: 0.5rem;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--smg-line);
+  border-radius: var(--smg-radius-pill);
+  overflow: hidden;
+}
+
+/* Width is set inline by JS. */
+.smg-preview__progress {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--smg-accent), var(--smg-good));
+  border-radius: inherit;
+  transition: width 0.2s linear;
+}
+
+.smg-preview__actions {
+  display: flex;
+  gap: var(--smg-space-2);
+}
+
+/* Replay / Stop / Reset (data-action). */
+.smg-preview__actions .smg-preview__btn,
+.smg-preview__btn[data-action] {
+  flex: 1;
+  font-weight: 700;
+}
+
+/* Non-blocking asset-fallback warning. */
+.smg-preview__warn {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--smg-warn);
+}
+
+.smg-preview__warn[hidden] {
+  display: none;
+}
+
+
+/* === Utilities & a11y === */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+/* Visible keyboard focus everywhere; mouse clicks don't ring. */
+:focus-visible {
+  outline: 3px solid var(--smg-focus);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Reduced motion: end all animation/transition immediately. Elements rely
+   on class toggles (.is-visible / hidden), not motion, for meaning, so
+   snapping to final state stays fully understandable. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+  }
+}
+
+
+/* === Responsive === */
+
+/* Tablet and below: full-width preview sheet, roomier screen padding,
+   overlay cards sized off viewport width. */
+@media (max-width: 900px) {
+  #scene .smg-preview {
+    right: var(--smg-space-2);
+    bottom: var(--smg-space-2);
+    left: var(--smg-space-2);
+    width: auto;
+    max-height: 45vh;
+    border-radius: var(--smg-radius);
+  }
+
+  .screen {
+    padding: var(--smg-space-3);
+  }
+}
+
+/* Small phones: keep labels wrapping instead of shrinking below legibility. */
+@media (max-width: 560px) {
+  .smg-preview__actions {
+    flex-wrap: wrap;
+  }
+
+  .smg-preview__actions .smg-preview__btn {
+    flex: 1 1 40%;
+  }
+
+  .smg-uplink {
+    top: var(--smg-space-2);
+    right: var(--smg-space-2);
+  }
+
+  .smg-uplink__label {
+    letter-spacing: 0.08em;
+  }
+
+  .smg-card {
+    padding: var(--smg-space-3) var(--smg-space-4);
+  }
+}
