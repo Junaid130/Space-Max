@@ -10,7 +10,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
   const browser = await puppeteer.launch({
-    executablePath: '/usr/bin/chromium-browser', headless: 'new',
+    executablePath: process.env.CHROME_BIN || '/usr/bin/chromium-browser', headless: 'new',
     args: ['--no-sandbox','--disable-gpu','--enable-unsafe-swiftshader',
            '--use-gl=angle','--use-angle=swiftshader',
            '--disable-background-timer-throttling','--disable-renderer-backgrounding',

@@ -39,7 +39,7 @@ function step(name, ok, detail) {
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
   const browser = await puppeteer.launch({
-    executablePath: '/usr/bin/chromium-browser',
+    executablePath: process.env.CHROME_BIN || '/usr/bin/chromium-browser',
     headless: 'new',
     args: ['--no-sandbox','--disable-gpu','--enable-unsafe-swiftshader',
            '--use-gl=angle','--use-angle=swiftshader','--window-size=1280,720']
