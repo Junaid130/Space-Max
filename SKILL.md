@@ -166,6 +166,8 @@ Ground every decision in this snapshot (verify it still matches before relying o
 | `css/style.css` | Implemented (~1.4k lines) | Token system, base/shell, scene overlay, Preview Lab, and all v2 screens (campaign/briefing/build/results). |
 | `js/data.js` | Implemented (~420 lines) | The five missions (v2 design: controls, win combos, `fails`/`comboFails`, knowledge) + 21 failure-copy entries. Content only. |
 | `js/sim.js` | Implemented (~440 lines) | `computeStats` / `validate` / `launch`; pure, deterministic, no DOM/THREE, evaluation order per §2. |
+| `archive/` | Reference only (not loaded) | Superseded work preserved by the branch merge: `v1-rocket-builder/` (the pre-v2 `data.js`/`sim.js` from `origin/simulation`) and `ui-screens-main/` (the earlier `ui.js` screens from `main`). `index.html` never loads anything here — see `archive/README.md`. |
+| `tests/` | Implemented | Verification harness: `node sim-test.js` (pure logic), `node test.js` and `node gameflow.js` (need a static server + a Chromium build; `CHROME_BIN` overrides the browser path). |
 | `3dmodels/` | 11 GLB files, 74 MB | All model assets live here (not `models/`). |
 | `project.md` | Empty | Ignore. |
 | `README.md` | Title only | Do not edit (not ours). |
@@ -183,6 +185,7 @@ Ground every decision in this snapshot (verify it still matches before relying o
 - All six JS/CSS files have landed (see table). `ui.js` drives the real flow and calls `SMG.scene.init()` itself; the Preview Lab additionally self-boots under `?visualPreview=1`, so it works standalone even if the UI never calls in.
 - Still missing: `index.html` loads no GLTFLoader/GSAP (scene guards both, primitives until approved — §8), and the rover/astronaut GLBs are not in `3dmodels/` yet (§7). The rocket GLBs (`Saturn V`, `Atlas_V_401`) are not yet used on the pad — the primitive rocket stays authoritative until a loader lands.
 - Re-verify this snapshot after pulling — the repo moves fast. If any file above is empty again, treat this table as stale.
+- **Branch sync (2026-11-15):** `main`, `origin/simulation` and `origin/animations` had diverged and were merged into `main`. The `animations` stack won every conflict because it is the only self-consistent, tested combination; the losing versions are in `archive/`, not in `js/`.
 
 ## 4. First action: inspect before coding
 
